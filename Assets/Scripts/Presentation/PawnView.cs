@@ -39,6 +39,10 @@ namespace LudoFriends.Presentation
         private bool _isPulsing = false;
         private Coroutine _pulseCoroutine;
 
+        // ✅ Bug 3 fix: Click debouncing
+        private float _lastClickTime = -999f;
+        private const float CLICK_DEBOUNCE_INTERVAL = 0.3f; // 300ms
+
         [SerializeField] private CanvasGroup canvasGroup;
 
         // ✅ Tıklama alanı için invisible collider
@@ -170,6 +174,15 @@ namespace LudoFriends.Presentation
 
         public void OnPointerClick(PointerEventData eventData)
         {
+            // ✅ Bug 3 fix: Debounce rapid clicks
+            float timeSinceLastClick = Time.time - _lastClickTime;
+            if (timeSinceLastClick < CLICK_DEBOUNCE_INTERVAL)
+            {
+                Debug.Log($"[PawnView] Click debounced ({timeSinceLastClick:F2}s)");
+                return;
+            }
+
+            _lastClickTime = Time.time;
             Clicked?.Invoke(this);
         }
 

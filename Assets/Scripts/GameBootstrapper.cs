@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq; // ✅ Bug 2 fix: LINQ for deduplication cleanup
 using LudoFriends.Core;
 using LudoFriends.Gameplay;
 using LudoFriends.Presentation;
@@ -9,7 +10,7 @@ using UnityEngine.SceneManagement;
 using LudoFriends.Networking;
 using Photon.Pun;
 
-public class GameBootstrapper : MonoBehaviour
+public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reconnection support
 {
     [Header("UI")]
     [SerializeField] private Button btnRestart;
@@ -98,6 +99,13 @@ public class GameBootstrapper : MonoBehaviour
     private readonly Dictionary<int, PawnView> _idToPawn = new Dictionary<int, PawnView>();
     private readonly Dictionary<PawnView, int> _pawnToId = new Dictionary<PawnView, int>();
     private int _nextPawnId = 1;
+
+    // ✅ Bug 2 & 3 fixes: Move deduplication and rapid click protection
+    private int _nextMoveId = 0;
+    private readonly Dictionary<int, bool> _processedMoves = new Dictionary<int, bool>();
+    private int _lastProcessedPawnId = -1;
+    private float _lastMoveRequestTime = -999f;
+    private const float MIN_MOVE_REQUEST_INTERVAL = 0.5f; // 500ms cooldown
 
     private int RegisterPawnId(PawnView pawn)
     {
@@ -221,6 +229,30 @@ public class GameBootstrapper : MonoBehaviour
 
         // ✅ İlk sıra için timer başlat (online + offline)
         StartTurnTimer(rollTimeLimit);
+    }
+
+    // ========== TIMER NETWORK EVENT SUBSCRIPTIONS (Fix 1) ==========
+
+    public override void OnEnable()
+    {
+        base.OnEnable();
+
+        if (_photon != null)
+        {
+            _photon.OnTimerStart += OnNetworkTimerStart;
+            _photon.OnTimerStop += OnNetworkTimerStop;
+        }
+    }
+
+    public override void OnDisable()
+    {
+        base.OnDisable();
+
+        if (_photon != null)
+        {
+            _photon.OnTimerStart -= OnNetworkTimerStart;
+            _photon.OnTimerStop -= OnNetworkTimerStop;
+        }
     }
 
     // ✅ YENİ metod
@@ -372,6 +404,111 @@ public class GameBootstrapper : MonoBehaviour
             btnRestart.onClick.RemoveListener(OnRestartClicked);
     }
 
+    // ✅ Bug 1 fix: Reconnection support - sync state when player joins/rejoins
+    public override void OnJoinedRoom()
+    {
+        base.OnJoinedRoom();
+
+        // Only restore state for non-host players (host already has correct state)
+        if (PhotonNetwork.IsMasterClient) return;
+
+        // Try to restore game state from room properties
+        if (_photon != null && _photon.TryGetGameState(
+            out int turn, out int roll, out int phase, out int sixes, out int extraTurns))
+        {
+            Debug.Log($"[OnJoinedRoom] Restoring state: Turn={turn}, Roll={roll}, Phase={phase}");
+
+            _state.CurrentTurnPlayerIndex = turn;
+            _currentRoll = roll;
+            _phase = (TurnPhase)phase;
+            _consecutiveSixes = sixes;
+            _extraTurnsEarned = extraTurns;
+
+            // Update UI
+            if (hudView != null)
+            {
+                hudView.SetTurn(_turnNames[turn], turn);
+                if (roll > 0)
+                    hudView.SetDice(roll);
+                else
+                    hudView.SetDice(-1);
+            }
+
+            // Update button state
+            if (btnRollDice != null)
+            {
+                bool isMyTurn = (turn == _localPlayerIndex);
+                btnRollDice.interactable = isMyTurn && _phase == TurnPhase.AwaitRoll && !_gameOver;
+            }
+
+            // Restore pawn states
+            RestorePawnStatesFromNetwork();
+
+            // Restart timer if needed
+            if (turn == _localPlayerIndex)
+            {
+                if (_phase == TurnPhase.AwaitRoll)
+                    StartTurnTimer(rollTimeLimit);
+                else if (_phase == TurnPhase.AwaitMove)
+                {
+                    // ✅ MODIFIED (Fix 2): Calculate remaining time from persisted state
+                    float timerDuration = moveTimeLimit;
+
+                    if (_photon != null && _photon.TryGetTimerState(out double startTime, out float savedDuration))
+                    {
+                        double elapsed = PhotonNetwork.Time - startTime;
+                        float remaining = savedDuration - (float)elapsed;
+
+                        // Add 2-second grace period for reconnection latency
+                        remaining += 2f;
+
+                        // Minimum 3 seconds to allow player interaction
+                        timerDuration = Mathf.Max(3f, remaining);
+
+                        Debug.Log($"[OnJoinedRoom] Calculated remaining time: {timerDuration:F1}s (elapsed: {elapsed:F1}s)");
+                    }
+
+                    StartTurnTimer(timerDuration);
+
+                    // Highlight legal moves
+                    var legal = GetLegalMoves(turn, roll);
+                    HighlightLegalMoves(legal);      // ✅ Enhancement 2: Visual pulse animation for reconnection
+                    SetOnlyLegalClickable(legal);
+                }
+            }
+        }
+    }
+
+    // ✅ Bug 3 fix: Handle player disconnects to prevent lockup
+    public override void OnPlayerLeftRoom(Photon.Realtime.Player otherPlayer)
+    {
+        base.OnPlayerLeftRoom(otherPlayer);
+
+        Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} left.");
+
+        if (PhotonNetwork.IsMasterClient)
+        {
+            // If the player who left was the current turn player
+            // ActorNumber is usually 1-indexed, but our logic maps 0..3 to ActorNumbers.
+            // We need to check if the left player corresponds to _state.CurrentTurnPlayerIndex.
+
+            // Simplified check: Just ensure the game keeps moving.
+            // If it was their turn, we need to skip them.
+
+            // Note: properly mapping ActorNumber to PlayerIndex depends on how rooms are set up.
+            // Assuming 4 player max room, actors 1,2,3,4.
+            // If we use simple mapping (ActorNumber - 1), then:
+            int leftPlayerIndex = otherPlayer.ActorNumber - 1;
+
+            if (leftPlayerIndex == _state.CurrentTurnPlayerIndex)
+            {
+                 Debug.Log($"[OnPlayerLeftRoom] Current turn player {leftPlayerIndex} disconnected. Advancing turn.");
+                 StopTurnTimer(); // Stop their timer
+                 AdvanceTurnInternalOnly(); // Skip to next
+            }
+        }
+    }
+
     // ✅ Zar atma: Sadece kendi sıran ise atabilirsin
     private void OnRollDiceClicked()
     {
@@ -399,8 +536,25 @@ public class GameBootstrapper : MonoBehaviour
 
         DisableAllPawnClicks();
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
+        // ✅ IMPACT FIX 1: Determine result IMMEDIATELY
+        int roll = _dice.Roll();
+        _currentRoll = roll;
 
+        // ✅ IMPACT FIX 1: Broadcast IMMEDIATELY
+        if (_photon != null && PhotonNetwork.InRoom)
+        {
+            int turn = _state.CurrentTurnPlayerIndex;
+            Debug.Log($"[CoRollDiceAnimated] Broadcasting Roll EARLY: P{turn} = {roll}");
+            _photon.BroadcastRoll(turn, roll);
+
+            // Host saves state immediately
+            if (PhotonNetwork.IsMasterClient)
+            {
+                _photon.SyncGameState(turn, roll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
+            }
+        }
+
+        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
         sfx?.PlayDice();
 
         float elapsed = 0f;
@@ -412,23 +566,12 @@ public class GameBootstrapper : MonoBehaviour
             yield return new WaitForSeconds(diceTickInterval);
         }
 
-        int roll = _dice.Roll();
-        _currentRoll = roll;
-
-        // ❌ KALDIR: _extraTurnsEarned++ (OnNetworkRoll'da yapılacak)
-
+        // ✅ Finalize visual
         hudView.SetDice(roll);
-
-        if (_photon != null && PhotonNetwork.InRoom)
-        {
-            int turn = _state.CurrentTurnPlayerIndex;
-            Debug.Log($"[CoRollDiceAnimated] Broadcasting Roll: P{turn} = {roll}");
-            _photon.BroadcastRoll(turn, roll);
-        }
 
         _isRollingDice = false;
 
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSeconds(0.5f); // Wait for players to see the result
 
     int turn2 = _state.CurrentTurnPlayerIndex;
 
@@ -545,6 +688,14 @@ public class GameBootstrapper : MonoBehaviour
         if (_currentRoll < 1) return;
         if (_isAnimating) return; // ✅ YENİ
 
+        // ✅ Bug 3 fix: Rapid click protection
+        float timeSinceLastRequest = Time.time - _lastMoveRequestTime;
+        if (timeSinceLastRequest < MIN_MOVE_REQUEST_INTERVAL)
+        {
+            Debug.Log($"[OnPawnClicked] Too fast! Wait {MIN_MOVE_REQUEST_INTERVAL - timeSinceLastRequest:F2}s");
+            return;
+        }
+
         int turn = _state.CurrentTurnPlayerIndex;
         if (turn != _localPlayerIndex) return;
 
@@ -553,6 +704,13 @@ public class GameBootstrapper : MonoBehaviour
 
         var legal = GetLegalMoves(turn, _currentRoll);
         if (!legal.Contains(pawn)) return;
+
+        // ✅ Bug 3 fix: Set cooldown timestamp
+        _lastMoveRequestTime = Time.time;
+
+        // ✅ Bug 3 fix: Immediately disable clicks to prevent rapid fire
+        DisableAllPawnClicks();
+        if (btnRollDice != null) btnRollDice.interactable = false;
 
         int pawnId = _pawnToId[pawn];
         _photon?.SendMoveRequest(turn, pawnId);
@@ -565,13 +723,30 @@ public class GameBootstrapper : MonoBehaviour
 
         if (playerIndex != _state.CurrentTurnPlayerIndex) return;
 
+        // ✅ Bug 3 fix: Prevent duplicate requests for same pawn while animating
+        if (_lastProcessedPawnId == pawnId && _isAnimating)
+        {
+            Debug.LogWarning($"[OnNetworkMoveRequest] Duplicate request for pawn {pawnId} ignored");
+            return;
+        }
+
         if (!_idToPawn.TryGetValue(pawnId, out var pawn)) return;
 
         var legal = GetLegalMoves(playerIndex, _currentRoll);
         if (!legal.Contains(pawn)) return;
 
-        // ✅ Host hamleyi broadcast eder
-        _photon.BroadcastMove(playerIndex, pawnId, _currentRoll);
+        // ✅ Bug 3 fix: Track this pawn as processed
+        _lastProcessedPawnId = pawnId;
+
+        // ✅ Bug 2 fix: Generate unique move ID
+        int moveId = _nextMoveId++;
+
+        // ✅ Host hamleyi broadcast eder with moveId
+        _photon.BroadcastMove(playerIndex, pawnId, _currentRoll, moveId);
+
+        // ✅ Bug 1 fix: Persist state after move validation
+        _photon.SyncGameState(_state.CurrentTurnPlayerIndex, _currentRoll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
+        SerializeAndSavePawnStates();
     }
 
     private void OnNetworkRoll(int playerIndex, int roll)
@@ -625,36 +800,48 @@ public class GameBootstrapper : MonoBehaviour
     if (btnRollDice != null)
         btnRollDice.interactable = false;
 
-    // ✅ Eğer ben atmadıysam (başka oyuncu veya oto-atılma) → zar animasyonu oynat
-    if (!_isRollingDice)
+    // ✅ IMPACT FIX 2: If we are not the one who initiated the local roll, play animation
+    // If we initiated it (CoRollDiceAnimated), we are already playing it.
+    bool amIRollingLocally = (playerIndex == _localPlayerIndex && _isRollingDice);
+
+    if (!amIRollingLocally)
     {
+        // Cancel any existing remote animation to prevent overlap/desync
+        StopCoroutine("CoRemoteDiceAnimation");
         StartCoroutine(CoRemoteDiceAnimation(playerIndex, roll));
     }
-    else
-    {
-        // Ben attım, CoRollDiceAnimated zaten animasyonu oynatıyor
-        hudView.SetDice(roll);
-    }
 
-    // ✅ Eğer benim sıramdaysa ama ben atmadıysam (host otomatik attı)
-    // → Hamle seçme fazına geç ve client'ın piyon seçmesine izin ver
-    if (playerIndex == _localPlayerIndex && !_isRollingDice && _consecutiveSixes < 3)
+    // ✅ Eğer Host değilsek ve sıra bizdeyse, ama biz atmadıysak (Timeout vs)
+    if (playerIndex == _localPlayerIndex && !amIRollingLocally && _consecutiveSixes < 3)
     {
-        // Not: AwaitMove fazı CoRemoteDiceAnimation bitince ayarlanacak
+         // Logic handled in CoRemoteDiceAnimation
     }
 
     // ✅ Host: uzak oyuncu için hamle timer'ı başlat
+    // (Wait for animation to finish effectively using the same duration logic)
     if (PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
+    {
+        // Add delay for animation
+        StartCoroutine(StartTimerAfterDelay(diceRollDuration + 0.5f, playerIndex, roll));
+    }
+}
+
+private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
+{
+    yield return new WaitForSeconds(delay);
+
+    // Check if state is still valid
+    if (_state.CurrentTurnPlayerIndex == playerIndex && _currentRoll == roll)
     {
         var legal = GetLegalMoves(playerIndex, roll);
         if (legal.Count > 1)
         {
             _phase = TurnPhase.AwaitMove;
             StartTurnTimer(moveTimeLimit);
-            Debug.Log($"[OnNetworkRoll] Host: starting move timer for remote P{playerIndex}, {legal.Count} legal moves");
+            Debug.Log($"[StartTimerAfterDelay] Host: starting move timer for P{playerIndex}");
         }
     }
-}
+    }
 
     // ✅ Uzaktan gelen zar atışı için görsel animasyon
     private IEnumerator CoRemoteDiceAnimation(int playerIndex, int finalRoll)
@@ -689,15 +876,35 @@ public class GameBootstrapper : MonoBehaviour
         }
     }
 
-    private void OnNetworkMove(int playerIndex, int pawnId, int roll)
+    private void OnNetworkMove(int playerIndex, int pawnId, int roll, int moveId) // ✅ Bug 2: moveId parametresi eklendi
     {
         StopTurnTimer(); // ✅ Timer durdur (senkronizasyon güvenliği)
-        Debug.Log($"[RPC RECEIVED] Move: P{playerIndex} pawn {pawnId} with roll {roll}");
+        Debug.Log($"[RPC RECEIVED] Move: P{playerIndex} pawn {pawnId} with roll {roll}, moveId={moveId}");
 
-        if (!_idToPawn.TryGetValue(pawnId, out var pawn)) return;
+        // ✅ Bug 2 fix: Deduplication check
+        if (_processedMoves.ContainsKey(moveId))
+        {
+            Debug.LogWarning($"[OnNetworkMove] Duplicate move {moveId} ignored");
+            return;
+        }
+
+        _processedMoves[moveId] = true;
+
+        // Clean old entries (keep last 100)
+        if (_processedMoves.Count > 100)
+        {
+            var oldest = _processedMoves.Keys.OrderBy(k => k).Take(50).ToList();
+            foreach (var k in oldest)
+                _processedMoves.Remove(k);
+        }
+
+        if (!_idToPawn.TryGetValue(pawnId, out var pawn))
+        {
+            Debug.LogError($"[OnNetworkMove] Pawn {pawnId} not found!");
+            return;
+        }
 
         _currentRoll = roll;
-        // ❌ _rolledSix KALDIR (artık counter var)
 
         ApplyMove(playerIndex, pawn, roll);
 
@@ -743,12 +950,25 @@ public class GameBootstrapper : MonoBehaviour
     StartTurnTimer(rollTimeLimit);
 }
 
+    // ========== TIMER NETWORK HANDLERS (Fix 1) ==========
+
+    private void OnNetworkTimerStart(float duration)
+    {
+        // Start local timer display for all clients
+        _timerActive = true;
+        _turnTimer = duration;
+    }
+
+
 
     private void FinishMove()
     {
         StopTurnTimer(); // ✅ Timer durdur
         _phase = TurnPhase.AwaitRoll;
         _isRollingDice = false;
+
+        // ✅ Bug 3 fix: Reset move tracking for next turn
+        _lastProcessedPawnId = -1;
 
         foreach (var kv in _pawnStates)
             kv.Key.SetClickable(false);
@@ -836,6 +1056,10 @@ public class GameBootstrapper : MonoBehaviour
         {
             Debug.Log($"[AdvanceTurnInternalOnly] Broadcasting Turn: P{_state.CurrentTurnPlayerIndex}");
             _photon.BroadcastTurn(_state.CurrentTurnPlayerIndex);
+
+            // ✅ Bug 1 fix: Persist state after turn change
+            _photon.SyncGameState(_state.CurrentTurnPlayerIndex, -1, (int)TurnPhase.AwaitRoll, 0, _extraTurnsEarned);
+            SerializeAndSavePawnStates();
         }
         else if (!PhotonNetwork.InRoom)
         {
@@ -1165,13 +1389,26 @@ public class GameBootstrapper : MonoBehaviour
 
     private void ApplyMove(int playerIndex, PawnView pawn, int roll)
     {
+        // ✅ Bug 2 & 3 fix: Set animation flag IMMEDIATELY at method start
+        _isAnimating = true;
+        DisableAllPawnClicks();
+        if (btnRollDice != null) btnRollDice.interactable = false;
+
         var st = _pawnStates[pawn];
 
         // ==================== EVDEN ÇIKIŞ ====================
         if (st.IsAtHome)
         {
-            if (roll != 6) return;
-            if (!TryGetStartIndexForPlayer(playerIndex, out int startIndex)) return;
+            if (roll != 6)
+            {
+                _isAnimating = false; // ✅ Reset on early exit
+                return;
+            }
+            if (!TryGetStartIndexForPlayer(playerIndex, out int startIndex))
+            {
+                _isAnimating = false; // ✅ Reset on early exit
+                return;
+            }
 
             st.EnterMainAt(startIndex);
 
@@ -1184,16 +1421,25 @@ public class GameBootstrapper : MonoBehaviour
             positionManager?.RegisterPawnAtWaypoint(pawn, startIndex);
 
             ResolveCaptures(pawn);
+            _isAnimating = false; // ✅ No animation for home exit, reset flag
             FinishMove();
             return;
         }
 
-        if (st.IsFinished) return;
+        if (st.IsFinished)
+        {
+            _isAnimating = false; // ✅ Reset on early exit
+            return;
+        }
 
         // ==================== HOME LANE ====================
          if (st.IsInHomeLane)
     {
-        if (st.HomeIndex + roll > 5) return;
+        if (st.HomeIndex + roll > 5)
+        {
+            _isAnimating = false; // ✅ Reset on early exit
+            return;
+        }
 
         var homePath = GetHomePath(playerIndex);
         int fromHome = st.HomeIndex;
@@ -1220,10 +1466,7 @@ public class GameBootstrapper : MonoBehaviour
                 sfx?.PlayFinish();  // ✅ YENİ
             }
 
-            // Animasyonu başlat, bitince FinishMove
-            _isAnimating = true;
-            DisableAllPawnClicks();
-            if (btnRollDice != null) btnRollDice.interactable = false;
+            // ✅ _isAnimating already set at method start, removed redundant lines
 
             pawnMover.MoveAlongPositions(pawn, positions, () =>
         {
@@ -1263,10 +1506,7 @@ public class GameBootstrapper : MonoBehaviour
             st.AdvanceMain(roll, pathCount);
             int targetIndex = st.MainIndex;
 
-            // Animasyonu başlat
-            _isAnimating = true;
-            DisableAllPawnClicks();
-            if (btnRollDice != null) btnRollDice.interactable = false;
+            // ✅ _isAnimating already set at method start, removed redundant lines
 
             pawnMover.MoveAlongPositions(pawn, positions, () =>
             {
@@ -1290,7 +1530,11 @@ public class GameBootstrapper : MonoBehaviour
             }
             sfx?.PlayFinish();  // ✅ YENİ
         }
-        if (_pawnOwner[pawn] != playerIndex) return;
+        if (_pawnOwner[pawn] != playerIndex)
+        {
+            _isAnimating = false; // ✅ Reset on early exit
+            return;
+        }
 
         if (_pawnCurrentWaypoint.TryGetValue(pawn, out int oldWp2))
         {
@@ -1323,10 +1567,7 @@ public class GameBootstrapper : MonoBehaviour
             Debug.Log($"[ApplyMove] Pawn finished! Extra turns: {_extraTurnsEarned}");
         }
 
-        // Animasyonu başlat
-        _isAnimating = true;
-        DisableAllPawnClicks();
-        if (btnRollDice != null) btnRollDice.interactable = false;
+        // ✅ _isAnimating already set at method start, removed redundant lines
 
         pawnMover.MoveAlongPositions(pawn, positions2, () =>
     {
@@ -1439,14 +1680,38 @@ public class GameBootstrapper : MonoBehaviour
         _clockPlayed = false; // ✅ Her yeni timer başlatıldığında sıfırla
         hudView?.SetTimer(_turnTimer);
         Debug.Log($"[Timer] Started: {duration}s for phase {_phase}");
+
+        // ✅ NEW (Fix 1): Broadcast to all clients (host only)
+        if (_photon != null && _photon.IsHost)
+        {
+            _photon.BroadcastTimerStart(duration);
+
+            // ✅ NEW (Fix 2): Save timer state with synchronized timestamp
+            _photon.SaveTimerState(PhotonNetwork.Time, duration);
+        }
     }
 
-    private void StopTurnTimer()
+    private void StopTurnTimer(bool broadcast = true)
     {
         _timerActive = false;
         _turnTimer = 0f;
         hudView?.HideTimer();
         sfx?.StopClock(); // ✅ Saat sesini durdur
+
+        // ✅ NEW (Fix 1): Broadcast to all clients (host only)
+        if (broadcast && _photon != null && _photon.IsHost)
+        {
+            _photon.BroadcastTimerStop();
+
+            // ✅ NEW (Fix 2): Clear timer state from room properties
+            _photon.ClearTimerState();
+        }
+    }
+
+    private void OnNetworkTimerStop()
+    {
+        // Stop local timer display for all clients
+        StopTurnTimer(false);
     }
 
     private void OnTurnTimerExpired()
@@ -1546,5 +1811,133 @@ private void OnHomeAreaClicked(int playerIndex)
     int pawnId = _pawnToId[homePawn];
     _photon?.SendMoveRequest(turn, pawnId);
 }
+
+    // ✅ ========== BUG 1 FIX: PAWN STATE SERIALIZATION METHODS ==========
+
+    /// <summary>
+    /// Serialize all pawn states and save to room properties (host only)
+    /// </summary>
+    private void SerializeAndSavePawnStates()
+    {
+        if (_photon == null || !PhotonNetwork.IsMasterClient) return;
+
+        // Format: "pawnId:zone:mainIndex:homeIndex:isInHomeLane:isFinished;"
+        var sb = new System.Text.StringBuilder();
+
+        foreach (var kvp in _pawnToId)
+        {
+            var pawn = kvp.Key;
+            var id = kvp.Value;
+            if (!_pawnStates.TryGetValue(pawn, out var state)) continue;
+
+            sb.Append(id).Append(":")
+              .Append((int)state.Zone).Append(":")
+              .Append(state.MainIndex).Append(":")
+              .Append(state.HomeIndex).Append(":")
+              .Append(state.IsInHomeLane ? 1 : 0).Append(":")
+              .Append(state.IsFinished ? 1 : 0).Append(";");
+        }
+
+        _photon.SavePawnStates(sb.ToString());
+        Debug.Log($"[SerializePawnStates] Saved {_pawnToId.Count} pawns");
+    }
+
+    /// <summary>
+    /// Restore pawn states from room properties (client only)
+    /// </summary>
+    private void RestorePawnStatesFromNetwork()
+    {
+        if (_photon == null) return;
+
+        string data = _photon.GetPawnStates();
+        if (string.IsNullOrEmpty(data))
+        {
+            Debug.Log("[RestorePawnStates] No pawn state data found");
+            return;
+        }
+
+        var entries = data.Split(';');
+        int restored = 0;
+
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrEmpty(entry)) continue;
+
+            var parts = entry.Split(':');
+            if (parts.Length < 6) continue;
+
+            int id = int.Parse(parts[0]);
+            if (!_idToPawn.TryGetValue(id, out var pawn)) continue;
+            if (!_pawnStates.TryGetValue(pawn, out var state)) continue;
+
+            var zone = (PawnZone)int.Parse(parts[1]);
+            int mainIndex = int.Parse(parts[2]);
+            int homeIndex = int.Parse(parts[3]);
+            bool isInHomeLane = parts[4] == "1";
+            bool isFinished = parts[5] == "1";
+
+            // Restore state based on zone
+            if (zone == PawnZone.Home)
+            {
+                state.ReturnHome();
+            }
+            else if (isFinished || zone == PawnZone.Finished)
+            {
+                // Pawn is in home lane and finished
+                state.EnterHomeLane();
+                for (int i = 0; i < 5; i++)
+                    state.AdvanceHome(1);
+            }
+            else if (isInHomeLane || zone == PawnZone.HomeLane)
+            {
+                // Pawn is in home lane
+                state.EnterHomeLane();
+                for (int i = 0; i < homeIndex; i++)
+                    state.AdvanceHome(1);
+            }
+            else if (zone == PawnZone.MainPath)
+            {
+                // Pawn is on main path
+                state.EnterMainAt(mainIndex);
+            }
+
+            // Restore visual position
+            Vector3 pos = GetPawnVisualPosition(pawn, state, _pawnOwner[pawn]);
+            pawn.SetPosition(pos);
+            restored++;
+        }
+
+        Debug.Log($"[RestorePawnStates] Restored {restored} pawns from network");
+    }
+
+    /// <summary>
+    /// Calculate visual position for a pawn based on its state
+    /// </summary>
+    private Vector3 GetPawnVisualPosition(PawnView pawn, PawnState state, int playerIndex)
+    {
+        if (state.IsAtHome)
+        {
+            // Get home slot position
+            return GetHomePawnPosition(pawn);
+        }
+
+        if (state.IsInHomeLane)
+        {
+            // Get home lane position
+            var homePath = GetHomePath(playerIndex);
+            if (homePath != null && state.HomeIndex >= 0 && state.HomeIndex < homePath.Count)
+                return homePath[state.HomeIndex].position;
+        }
+        else if (state.Zone == PawnZone.MainPath)
+        {
+            // Get main path position
+            if (state.MainIndex >= 0 && state.MainIndex < boardWaypoints.MainPath.Count)
+                return boardWaypoints.MainPath[state.MainIndex].position;
+        }
+
+        // Fallback: return home position
+        return GetHomePawnPosition(pawn);
+    }
+
 
 }

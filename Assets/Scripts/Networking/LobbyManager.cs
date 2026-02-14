@@ -17,6 +17,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [SerializeField] private Button btnJoin;
     [SerializeField] private Button btnBack;
     [SerializeField] private Button btnCopyCode;
+    [SerializeField] private Button btnStartGame; // ✅ Enhancement 1: Host manual start
     [SerializeField] private TMP_InputField inputRoomCode;
 
     [Header("Texts")]
@@ -77,6 +78,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         btnPublic?.onClick.AddListener(OnPublicClicked);
 btnPrivate?.onClick.AddListener(OnPrivateClicked);
 btnCancelChoice?.onClick.AddListener(OnCancelChoiceClicked);
+        btnStartGame?.onClick.AddListener(OnStartGameClicked); // ✅ Enhancement 1
 
 if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 
@@ -85,6 +87,7 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 
         txtStatus.text = "Sunucuya bağlanılıyor...";
         if (txtCountdown != null) txtCountdown.text = "";
+        if (btnStartGame != null) btnStartGame.gameObject.SetActive(false); // ✅ Enhancement 1: Hide initially
 
         PhotonNetwork.ConnectUsingSettings();
     }
@@ -98,6 +101,7 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
         btnPublic?.onClick.RemoveListener(OnPublicClicked);
 btnPrivate?.onClick.RemoveListener(OnPrivateClicked);
 btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
+        btnStartGame?.onClick.RemoveListener(OnStartGameClicked); // ✅ Enhancement 1
 
         if (_countdownCoroutine != null)
             StopCoroutine(_countdownCoroutine);
@@ -137,6 +141,28 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         _currentRoomCode = PhotonNetwork.CurrentRoom.Name;
         SetRoomCodeUI(_currentRoomCode);
         UpdatePlayerList();
+
+        // ✅ Enhancement 1: Show/hide start button based on host status
+        if (btnStartGame != null)
+        {
+            btnStartGame.gameObject.SetActive(PhotonNetwork.IsMasterClient);
+            btnStartGame.interactable = PhotonNetwork.CurrentRoom.PlayerCount >= minPlayersToStart;
+        }
+
+        // ✅ NEW (Fix 3): Show waiting message for clients
+        if (txtCountdown != null)
+        {
+            if (PhotonNetwork.IsMasterClient)
+            {
+                // Host will display countdown when it starts
+                txtCountdown.text = "";
+            }
+            else
+            {
+                // Clients see waiting message
+                txtCountdown.text = "Waiting for host...";
+            }
+        }
 
         // Host: geri sayım başlat
         if (PhotonNetwork.IsMasterClient && !_gameStarted)
@@ -196,6 +222,35 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     if (panelCreateChoice != null)
         panelCreateChoice.SetActive(true);
 }
+
+    // ✅ Enhancement 1: Host manual start game button
+    private void OnStartGameClicked()
+    {
+        PlayClick();
+
+        if (!PhotonNetwork.IsMasterClient)
+        {
+            Debug.LogWarning("[OnStartGameClicked] Only host can start game!");
+            return;
+        }
+
+        int playerCount = PhotonNetwork.CurrentRoom.PlayerCount;
+        if (playerCount < minPlayersToStart)
+        {
+            Debug.LogWarning($"[OnStartGameClicked] Need {minPlayersToStart} players, have {playerCount}");
+            return;
+        }
+
+        // Stop countdown coroutine to prevent race condition
+        if (_countdownCoroutine != null)
+        {
+            StopCoroutine(_countdownCoroutine);
+            _countdownCoroutine = null;
+        }
+
+        Debug.Log("[OnStartGameClicked] Host manually starting game!");
+        StartGame();
+    }
 
     private void OnJoinClicked()
 {
@@ -361,6 +416,12 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
             }
 
             index++;
+        }
+
+        // ✅ Enhancement 1: Update start button state based on player count
+        if (btnStartGame != null && PhotonNetwork.IsMasterClient)
+        {
+            btnStartGame.interactable = playerCount >= minPlayersToStart;
         }
     }
 
