@@ -10,6 +10,7 @@ public class SfxPlayer : MonoBehaviour
     [SerializeField] private AudioClip captureMoveClip;
     [SerializeField] private AudioClip yourTurnClip;
     [SerializeField] private AudioClip finishClip;
+    [SerializeField] private AudioClip clockClip;       // ✅ Süre azalma sesi
 
     [Header("Settings")]
     [SerializeField] private AudioSource audioSource;
@@ -100,6 +101,11 @@ public class SfxPlayer : MonoBehaviour
 public void PlayFinish()
 {
     PlayOneShot(finishClip);
+}
+
+public void PlayClock()
+{
+    PlayOneShot(clockClip);
 }
 
 }

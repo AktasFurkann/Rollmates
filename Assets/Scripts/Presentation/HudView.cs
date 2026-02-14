@@ -19,6 +19,9 @@ namespace LudoFriends.Presentation
 [Header("Roll Button")]
 [SerializeField] private Image rollButtonImage;     // ✅ YENİ: Roll butonunun Image'ı
 
+[Header("Timer")]
+[SerializeField] private TextMeshProUGUI txtTimer;  // ✅ Geri sayım göstergesi
+
         private readonly Color[] _turnColors = new Color[]
         {
             new Color(0.9f, 0.15f, 0.15f),  // Kırmızı
@@ -71,6 +74,26 @@ namespace LudoFriends.Presentation
         public void SetDice(int value)
         {
             txtDice.text = value < 0 ? "-" : value.ToString();
+        }
+
+        // ✅ Timer UI metotları
+        public void SetTimer(float seconds)
+        {
+            if (txtTimer == null) return;
+            int sec = Mathf.CeilToInt(seconds);
+            txtTimer.text = sec > 0 ? sec.ToString() : "";
+
+            // Son 5 saniyede kırmızıya dön
+            if (sec <= 5)
+                txtTimer.color = new Color(0.9f, 0.15f, 0.15f);
+            else
+                txtTimer.color = Color.white;
+        }
+
+        public void HideTimer()
+        {
+            if (txtTimer != null)
+                txtTimer.text = "";
         }
     }
 }

@@ -86,6 +86,13 @@ public class GameBootstrapper : MonoBehaviour
     [Header("Board Rotation")]
     [SerializeField] private BoardRotator boardRotator;
 
+    [Header("Turn Timer")]
+    [SerializeField] private float rollTimeLimit = 15f;
+    [SerializeField] private float moveTimeLimit = 10f;
+    private float _turnTimer = 0f;
+    private bool _timerActive = false;
+    private bool _clockPlayed = false; // ✅ 3 saniye sesi tekrar çalmasın diye flag
+
     private readonly string[] _turnNames = { "Kırmızı", "Yeşil", "Sarı", "Mavi" };
 
     private readonly Dictionary<int, PawnView> _idToPawn = new Dictionary<int, PawnView>();
@@ -211,6 +218,9 @@ public class GameBootstrapper : MonoBehaviour
         }
 
         HighlightActivePlayerPawns();
+
+        // ✅ İlk sıra için timer başlat (online + offline)
+        StartTurnTimer(rollTimeLimit);
     }
 
     // ✅ YENİ metod
@@ -521,6 +531,9 @@ public class GameBootstrapper : MonoBehaviour
     HighlightLegalMoves(legal);
     SetOnlyLegalClickable(legal);
     _phase = TurnPhase.AwaitMove;
+
+    // ✅ Piyon seçim timer'ı başlat
+    StartTurnTimer(moveTimeLimit);
 }
 
 
@@ -565,6 +578,9 @@ public class GameBootstrapper : MonoBehaviour
 {
     Debug.Log($"[OnNetworkRoll] P{playerIndex} rolled {roll}, LocalPlayer={_localPlayerIndex}");
 
+    // ✅ Timer'ı HERKESTE durdur (senkronizasyon düzeltmesi)
+    StopTurnTimer();
+
     if (roll == 6)
     {
         _consecutiveSixes++;
@@ -601,16 +617,81 @@ public class GameBootstrapper : MonoBehaviour
         _consecutiveSixes = 0;
     }
 
-    if (playerIndex != _localPlayerIndex)
+    // ✅ Zar ve UI'ı TÜM oyuncular için güncelle
+    _currentRoll = roll;
+    hudView.SetTurn(_turnNames[playerIndex], playerIndex);
+
+    // ✅ Çift zar atmayı engelle
+    if (btnRollDice != null)
+        btnRollDice.interactable = false;
+
+    // ✅ Eğer ben atmadıysam (başka oyuncu veya oto-atılma) → zar animasyonu oynat
+    if (!_isRollingDice)
     {
-        _currentRoll = roll;
+        StartCoroutine(CoRemoteDiceAnimation(playerIndex, roll));
+    }
+    else
+    {
+        // Ben attım, CoRollDiceAnimated zaten animasyonu oynatıyor
         hudView.SetDice(roll);
-        hudView.SetTurn(_turnNames[playerIndex], playerIndex);
+    }
+
+    // ✅ Eğer benim sıramdaysa ama ben atmadıysam (host otomatik attı)
+    // → Hamle seçme fazına geç ve client'ın piyon seçmesine izin ver
+    if (playerIndex == _localPlayerIndex && !_isRollingDice && _consecutiveSixes < 3)
+    {
+        // Not: AwaitMove fazı CoRemoteDiceAnimation bitince ayarlanacak
+    }
+
+    // ✅ Host: uzak oyuncu için hamle timer'ı başlat
+    if (PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
+    {
+        var legal = GetLegalMoves(playerIndex, roll);
+        if (legal.Count > 1)
+        {
+            _phase = TurnPhase.AwaitMove;
+            StartTurnTimer(moveTimeLimit);
+            Debug.Log($"[OnNetworkRoll] Host: starting move timer for remote P{playerIndex}, {legal.Count} legal moves");
+        }
     }
 }
 
+    // ✅ Uzaktan gelen zar atışı için görsel animasyon
+    private IEnumerator CoRemoteDiceAnimation(int playerIndex, int finalRoll)
+    {
+        sfx?.PlayDice();
+
+        float elapsed = 0f;
+        while (elapsed < diceRollDuration)
+        {
+            int fakeValue = Random.Range(1, 7);
+            hudView.SetDice(fakeValue);
+            elapsed += diceTickInterval;
+            yield return new WaitForSeconds(diceTickInterval);
+        }
+
+        hudView.SetDice(finalRoll);
+
+        yield return new WaitForSeconds(0.3f);
+
+        // ✅ Eğer benim için oto-atıldıysa, şimdi AwaitMove fazını kur
+        if (playerIndex == _localPlayerIndex && _consecutiveSixes < 3)
+        {
+            var legal = GetLegalMoves(playerIndex, finalRoll);
+            if (legal.Count > 1)
+            {
+                _phase = TurnPhase.AwaitMove;
+                HighlightLegalMoves(legal);
+                SetOnlyLegalClickable(legal);
+                StartTurnTimer(moveTimeLimit);
+                Debug.Log($"[CoRemoteDiceAnimation] Auto-rolled for me, entering AwaitMove with {legal.Count} legal moves");
+            }
+        }
+    }
+
     private void OnNetworkMove(int playerIndex, int pawnId, int roll)
     {
+        StopTurnTimer(); // ✅ Timer durdur (senkronizasyon güvenliği)
         Debug.Log($"[RPC RECEIVED] Move: P{playerIndex} pawn {pawnId} with roll {roll}");
 
         if (!_idToPawn.TryGetValue(pawnId, out var pawn)) return;
@@ -657,11 +738,15 @@ public class GameBootstrapper : MonoBehaviour
         #endif
     }
     HighlightActivePlayerPawns();
+
+    // ✅ Zar atma timer'ı başlat
+    StartTurnTimer(rollTimeLimit);
 }
 
 
     private void FinishMove()
     {
+        StopTurnTimer(); // ✅ Timer durdur
         _phase = TurnPhase.AwaitRoll;
         _isRollingDice = false;
 
@@ -716,6 +801,7 @@ public class GameBootstrapper : MonoBehaviour
                 btnRollDice.interactable = !_gameOver;
 
             HighlightActivePlayerPawns();
+            StartTurnTimer(rollTimeLimit); // ✅ Extra turn için timer yeniden başlat
             return;
         }
 
@@ -724,6 +810,7 @@ public class GameBootstrapper : MonoBehaviour
 
     private void AdvanceTurnInternalOnly()
     {
+        StopTurnTimer(); // ✅ Timer durdur
         Debug.Log($"[AdvanceTurnInternalOnly] Advancing from P{_state.CurrentTurnPlayerIndex}");
 
         _phase = TurnPhase.AwaitRoll;
@@ -757,6 +844,8 @@ public class GameBootstrapper : MonoBehaviour
 
             if (btnRollDice != null)
                 btnRollDice.interactable = !_gameOver;
+
+            StartTurnTimer(rollTimeLimit); // ✅ Offline modda sıra değişiminde timer başlat
         }
 
         HighlightActivePlayerPawns();
@@ -1319,6 +1408,81 @@ public class GameBootstrapper : MonoBehaviour
         {
             Screen.fullScreen = !Screen.fullScreen;
         }
+
+        // ✅ Turn Timer Tick
+        if (_timerActive && !_gameOver && !_paused)
+        {
+            _turnTimer -= Time.deltaTime;
+            hudView?.SetTimer(_turnTimer);
+
+            // ✅ 3 saniye kala clock sesi çal
+            if (_turnTimer <= 3f && !_clockPlayed)
+            {
+                _clockPlayed = true;
+                sfx?.PlayClock();
+            }
+
+            if (_turnTimer <= 0f)
+            {
+                _timerActive = false;
+                hudView?.HideTimer();
+                OnTurnTimerExpired();
+            }
+        }
+    }
+
+    // ✅ Timer yardımcı metotları
+    private void StartTurnTimer(float duration)
+    {
+        _turnTimer = duration;
+        _timerActive = true;
+        _clockPlayed = false; // ✅ Her yeni timer başlatıldığında sıfırla
+        hudView?.SetTimer(_turnTimer);
+        Debug.Log($"[Timer] Started: {duration}s for phase {_phase}");
+    }
+
+    private void StopTurnTimer()
+    {
+        _timerActive = false;
+        _turnTimer = 0f;
+        hudView?.HideTimer();
+    }
+
+    private void OnTurnTimerExpired()
+    {
+        Debug.Log($"[Timer] Expired! Phase={_phase}, Turn=P{_state.CurrentTurnPlayerIndex}");
+
+        // Online: sadece host timeout kararını alır
+        if (PhotonNetwork.InRoom && !PhotonNetwork.IsMasterClient) return;
+
+        if (_phase == TurnPhase.AwaitRoll)
+        {
+            AutoRollDice();
+        }
+        else if (_phase == TurnPhase.AwaitMove)
+        {
+            AutoMovePawn();
+        }
+    }
+
+    private void AutoRollDice()
+    {
+        if (_isRollingDice || _isAnimating) return;
+        Debug.Log($"[Timer] Auto-rolling dice for P{_state.CurrentTurnPlayerIndex}");
+        StartCoroutine(CoRollDiceAnimated());
+    }
+
+    private void AutoMovePawn()
+    {
+        int turn = _state.CurrentTurnPlayerIndex;
+        var legal = GetLegalMoves(turn, _currentRoll);
+        if (legal.Count == 0) return;
+
+        // Rastgele bir legal piyon seç
+        PawnView chosen = legal[Random.Range(0, legal.Count)];
+        int pawnId = _pawnToId[chosen];
+        Debug.Log($"[Timer] Auto-moving pawn {pawnId} for P{turn}");
+        _photon?.SendMoveRequest(turn, pawnId);
     }
 private int GetHomeLaneKey(int playerIndex, int homeIndex)
 {
