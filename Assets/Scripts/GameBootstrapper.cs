@@ -1446,6 +1446,7 @@ public class GameBootstrapper : MonoBehaviour
         _timerActive = false;
         _turnTimer = 0f;
         hudView?.HideTimer();
+        sfx?.StopClock(); // ✅ Saat sesini durdur
     }
 
     private void OnTurnTimerExpired()

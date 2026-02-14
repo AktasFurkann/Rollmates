@@ -103,9 +103,33 @@ public void PlayFinish()
     PlayOneShot(finishClip);
 }
 
+// ✅ Saat sesi (durdurulabilir)
+private AudioSource _clockSource;
+
 public void PlayClock()
 {
-    PlayOneShot(clockClip);
+    if (_muted || clockClip == null) return;
+
+    if (_clockSource == null)
+    {
+        GameObject go = new GameObject("ClockSource");
+        go.transform.SetParent(transform);
+        _clockSource = go.AddComponent<AudioSource>();
+        _clockSource.playOnAwake = false;
+    }
+
+    if (_clockSource.isPlaying) return; // Zaten çalıyorsa tekrar başlatma
+
+    _clockSource.clip = clockClip;
+    _clockSource.volume = volume;
+    _clockSource.loop = false;
+    _clockSource.Play();
+}
+
+public void StopClock()
+{
+    if (_clockSource != null && _clockSource.isPlaying)
+        _clockSource.Stop();
 }
 
 }
