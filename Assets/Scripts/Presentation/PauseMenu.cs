@@ -1,4 +1,5 @@
 using TMPro;
+using Photon.Pun;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -27,7 +28,7 @@ public class PauseMenu : MonoBehaviour
         if (panel != null) panel.SetActive(false);
 
         if (btnResume != null) btnResume.onClick.AddListener(Resume);
-        if (btnRestart != null) btnRestart.onClick.AddListener(Restart);
+        if (btnRestart != null) btnRestart.onClick.AddListener(ExitToMainMenu);
 
         // prefs yükle
         bool muted = PlayerPrefs.GetInt(PrefSfxMuted, 0) == 1;
@@ -46,7 +47,7 @@ public class PauseMenu : MonoBehaviour
     private void OnDestroy()
     {
         if (btnResume != null) btnResume.onClick.RemoveListener(Resume);
-        if (btnRestart != null) btnRestart.onClick.RemoveListener(Restart);
+        if (btnRestart != null) btnRestart.onClick.RemoveListener(ExitToMainMenu);
 
         if (tglSfx != null) tglSfx.onValueChanged.RemoveListener(OnSfxToggle);
         if (ddlSpeed != null) ddlSpeed.onValueChanged.RemoveListener(OnSpeedChanged);
@@ -88,10 +89,17 @@ public void Resume()
 }
 
 
-    private void Restart()
+    private void ExitToMainMenu()
     {
         Time.timeScale = 1f;
-        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+
+        if (PhotonNetwork.InRoom)
+            PhotonNetwork.LeaveRoom();
+
+        if (PhotonNetwork.IsConnected)
+            PhotonNetwork.Disconnect();
+
+        SceneManager.LoadScene(0);
     }
 
     private void OnSfxToggle(bool isOn)

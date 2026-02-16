@@ -19,6 +19,13 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [SerializeField] private GameObject winnerPanel;
     [SerializeField] private TMPro.TextMeshProUGUI txtWinner;
 
+    [Header("Scoreboard")]
+    [SerializeField] private GameObject scoreboardPanel;
+    [SerializeField] private TMPro.TextMeshProUGUI txtScoreboardTitle;
+    [SerializeField] private TMPro.TextMeshProUGUI[] scoreboardTexts; // 4 elemanlı
+    [SerializeField] private Button btnScoreboardClose;   // X butonu
+    [SerializeField] private Button btnMainMenu;          // Ana Menü butonu
+
     [Header("Home Click Areas")]
 [SerializeField] private HomeAreaClick homeClickRed;
 [SerializeField] private HomeAreaClick homeClickGreen;
@@ -74,6 +81,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private readonly Dictionary<PawnView, int> _pawnOwner = new Dictionary<PawnView, int>();
     private bool _gameOver = false;
+    private readonly List<int> _finishOrder = new List<int>();
+    private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
 
     [Header("Pawn Sprites")]
     [SerializeField] private Sprite redPawnSprite;
@@ -119,6 +128,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     // ✅ Yeni: Her oyuncunun hangi player index'i olduğunu tutan map
     private int _localPlayerIndex = -1;
+    private int _initialPlayerCount;
 
     private void Awake()
     {
@@ -177,6 +187,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             positionManager.CacheHomeLanePositions(3, boardWaypoints.HomeB);
         }
 
+        _initialPlayerCount = PlayerCount;
+
         hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
         hudView.SetDice(-1);
 
@@ -204,6 +216,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (winnerPanel != null)
             winnerPanel.SetActive(false);
+
+        InitScoreboard();
 
         if (btnRestart != null)
             btnRestart.onClick.AddListener(OnRestartClicked);
@@ -316,6 +330,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             positionManager.CacheHomeLanePositions(3, boardWaypoints.HomeB);
         }
 
+        _initialPlayerCount = PlayerCount;
+
         hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
         hudView.SetDice(-1);
 
@@ -343,6 +359,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (winnerPanel != null)
             winnerPanel.SetActive(false);
+
+        InitScoreboard();
 
         if (btnRestart != null)
             btnRestart.onClick.AddListener(OnRestartClicked);
@@ -402,6 +420,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (btnRestart != null)
             btnRestart.onClick.RemoveListener(OnRestartClicked);
+
+        if (btnScoreboardClose != null)
+            btnScoreboardClose.onClick.RemoveListener(OnScoreboardClose);
+
+        if (btnMainMenu != null)
+            btnMainMenu.onClick.RemoveListener(OnMainMenuClicked);
     }
 
     // ✅ Bug 1 fix: Reconnection support - sync state when player joins/rejoins
@@ -444,6 +468,19 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             // Restore pawn states
             RestorePawnStatesFromNetwork();
 
+            // Restore finish order (scoreboard)
+            var savedFinishOrder = _photon.GetFinishOrder();
+            if (savedFinishOrder != null && savedFinishOrder.Length > 0)
+            {
+                _finishOrder.Clear();
+                _finishOrder.AddRange(savedFinishOrder);
+
+                if (_finishOrder.Count >= PlayerCount)
+                    _gameOver = true;
+
+                UpdateScoreboard();
+            }
+
             // Restart timer if needed
             if (turn == _localPlayerIndex)
             {
@@ -484,27 +521,63 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         base.OnPlayerLeftRoom(otherPlayer);
 
-        Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} left.");
+        if (_gameOver) return;
 
-        if (PhotonNetwork.IsMasterClient)
+        int leftPlayerIndex = otherPlayer.ActorNumber - 1;
+        Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} (Index={leftPlayerIndex}) left.");
+
+        // Çıkan oyuncuyu henüz sıralamada değilse sonuncu yap
+        if (!_finishOrder.Contains(leftPlayerIndex))
         {
-            // If the player who left was the current turn player
-            // ActorNumber is usually 1-indexed, but our logic maps 0..3 to ActorNumbers.
-            // We need to check if the left player corresponds to _state.CurrentTurnPlayerIndex.
+            _finishOrder.Add(leftPlayerIndex);
+            Debug.Log($"[OnPlayerLeftRoom] P{leftPlayerIndex} added to finish order as #{_finishOrder.Count}");
+        }
+        _disconnectedPlayers.Add(leftPlayerIndex);
 
-            // Simplified check: Just ensure the game keeps moving.
-            // If it was their turn, we need to skip them.
+        // Kaç aktif (bitmemiş) oyuncu kaldı?
+        int totalPlayers = _initialPlayerCount;
+        int remainingPlayers = 0;
+        int lastRemainingIndex = -1;
+        for (int i = 0; i < totalPlayers; i++)
+        {
+            if (!_finishOrder.Contains(i))
+            {
+                remainingPlayers++;
+                lastRemainingIndex = i;
+            }
+        }
 
-            // Note: properly mapping ActorNumber to PlayerIndex depends on how rooms are set up.
-            // Assuming 4 player max room, actors 1,2,3,4.
-            // If we use simple mapping (ActorNumber - 1), then:
-            int leftPlayerIndex = otherPlayer.ActorNumber - 1;
+        // Sadece 1 kişi kaldıysa → o 1., oyun biter
+        if (remainingPlayers <= 1 && lastRemainingIndex >= 0)
+        {
+            // Kalan oyuncuyu 1. sıraya koy (listenin başına)
+            _finishOrder.Insert(0, lastRemainingIndex);
+            _gameOver = true;
+            if (sfx != null) sfx.PlayWin();
 
+            if (btnRollDice != null)
+                btnRollDice.interactable = false;
+
+            StopTurnTimer();
+            ClearAllHighlights();
+            Debug.Log($"[OnPlayerLeftRoom] Only P{lastRemainingIndex} remains, game over!");
+        }
+
+        // Scoreboard güncelle
+        UpdateScoreboard();
+
+        // Photon state kaydet
+        if (PhotonNetwork.IsMasterClient)
+            _photon?.SaveFinishOrder(_finishOrder.ToArray());
+
+        // Oyun devam ediyorsa ve çıkan kişinin sırasıysa → atla
+        if (!_gameOver && PhotonNetwork.IsMasterClient)
+        {
             if (leftPlayerIndex == _state.CurrentTurnPlayerIndex)
             {
-                 Debug.Log($"[OnPlayerLeftRoom] Current turn player {leftPlayerIndex} disconnected. Advancing turn.");
-                 StopTurnTimer(); // Stop their timer
-                 AdvanceTurnInternalOnly(); // Skip to next
+                Debug.Log($"[OnPlayerLeftRoom] Current turn player {leftPlayerIndex} disconnected. Advancing turn.");
+                StopTurnTimer();
+                AdvanceTurnInternalOnly();
             }
         }
     }
@@ -978,6 +1051,14 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         {
             if (PhotonNetwork.IsMasterClient)
             {
+                // Bitiren oyuncuya extra turn verme
+                if (_finishOrder.Contains(_state.CurrentTurnPlayerIndex))
+                {
+                    _extraTurnsEarned = 0;
+                    AdvanceTurnInternalOnly();
+                    return;
+                }
+
                 // ✅ Host: extra turn varsa aynı oyuncu devam
                 if (_extraTurnsEarned > 0)
                 {
@@ -998,11 +1079,15 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
                 _currentRoll = -1;
                 hudView.SetDice(-1);
 
+                // Bitiren oyuncu extra turn almasın
+                if (_finishOrder.Contains(_localPlayerIndex))
+                    _extraTurnsEarned = 0;
+
                 // ✅ Eğer Turn RPC zaten geldi ve sıra bizdeyse, butonu açık bırak
                 if (btnRollDice != null)
                 {
                     bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                    btnRollDice.interactable = isMyTurn && !_gameOver;
+                    btnRollDice.interactable = isMyTurn && !_gameOver && !_finishOrder.Contains(_localPlayerIndex);
                     Debug.Log($"[FinishMove] Client: turn={_state.CurrentTurnPlayerIndex}, myTurn={isMyTurn}, button={btnRollDice.interactable}");
                 }
             }
@@ -1010,6 +1095,14 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         }
 
         // ==================== OFFLINE ====================
+        // Bitiren oyuncuya extra turn verme
+        if (_finishOrder.Contains(_state.CurrentTurnPlayerIndex))
+        {
+            _extraTurnsEarned = 0;
+            AdvanceTurnInternalOnly();
+            return;
+        }
+
         if (_extraTurnsEarned > 0)
         {
             _extraTurnsEarned--;
@@ -1037,19 +1130,17 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         _currentRoll = -1;
         _consecutiveSixes = 0; // ✅ YENİ
 
-        _state.NextTurn(PlayerCount);
+        _state.NextTurn(_initialPlayerCount);
+
+        // Bitiren/çıkan oyuncuları atla (sonsuz döngü korumalı)
+        int safetyCount = 0;
+        while (_finishOrder.Contains(_state.CurrentTurnPlayerIndex) && safetyCount < _initialPlayerCount)
+        {
+            _state.NextTurn(_initialPlayerCount);
+            safetyCount++;
+        }
 
         Debug.Log($"[AdvanceTurnInternalOnly] New turn: P{_state.CurrentTurnPlayerIndex}");
-
-        if (PhotonNetwork.InRoom)
-        {
-            int maxPlayerIndex = PhotonNetwork.CurrentRoom.PlayerCount - 1;
-
-            while (_state.CurrentTurnPlayerIndex > maxPlayerIndex)
-            {
-                _state.NextTurn(PlayerCount);
-            }
-        }
 
         // ✅ SADECE HOST BROADCAST EDER
         if (_photon != null && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient)
@@ -1316,29 +1407,129 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         int finished = CountFinishedPawns(playerIndex);
         if (finished < 4) return;
 
-        _gameOver = true;
+        // Zaten sıralamada varsa tekrar ekleme
+        if (_finishOrder.Contains(playerIndex)) return;
 
-        if (btnRollDice != null)
-            btnRollDice.interactable = false;
+        _finishOrder.Add(playerIndex);
+        sfx?.PlayWin();
 
-        if (winnerPanel != null)
+        // Online: finishOrder'u room properties'e kaydet (late joiner için)
+        if (_photon != null && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient)
+            _photon.SaveFinishOrder(_finishOrder.ToArray());
+
+        int activePlayers = PlayerCount;
+
+        // Son kalan oyuncuyu otomatik ekle
+        if (_finishOrder.Count >= activePlayers - 1)
         {
-            winnerPanel.SetActive(true);
-            sfx?.PlayWin();
+            for (int i = 0; i < activePlayers; i++)
+            {
+                if (!_finishOrder.Contains(i))
+                {
+                    _finishOrder.Add(i);
+                    break;
+                }
+            }
+
+            _gameOver = true;
+
+            if (btnRollDice != null)
+                btnRollDice.interactable = false;
+
+            ClearAllHighlights();
         }
 
-        if (txtWinner != null)
-        {
-            string winner = _turnNames[playerIndex];
-            txtWinner.text = $"{winner} kazandı!";
-        }
-
-        ClearAllHighlights();
+        UpdateScoreboard();
     }
 
     private void OnRestartClicked()
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    // ==================== SCOREBOARD ====================
+
+    private void InitScoreboard()
+    {
+        if (scoreboardPanel != null)
+            scoreboardPanel.SetActive(false);
+
+        if (btnScoreboardClose != null)
+            btnScoreboardClose.onClick.AddListener(OnScoreboardClose);
+
+        if (btnMainMenu != null)
+        {
+            btnMainMenu.onClick.AddListener(OnMainMenuClicked);
+            btnMainMenu.gameObject.SetActive(false);
+        }
+    }
+
+    private void UpdateScoreboard()
+    {
+        if (scoreboardPanel == null) return;
+
+        // Gösterim sırasını oluştur: 1) Meşru bitirenler, 2) ???, 3) Disconnect olanlar
+        var displayEntries = new List<string>();
+
+        // 1. Meşru bitirenler (disconnect olmayan, _finishOrder sırasıyla)
+        foreach (int idx in _finishOrder)
+        {
+            if (!_disconnectedPlayers.Contains(idx))
+                displayEntries.Add(_turnNames[idx]);
+        }
+
+        // 2. Hala oynayan oyuncular → "???"
+        for (int i = 0; i < _initialPlayerCount; i++)
+        {
+            if (!_finishOrder.Contains(i))
+                displayEntries.Add("???");
+        }
+
+        // 3. Disconnect olanlar (en sona)
+        foreach (int idx in _finishOrder)
+        {
+            if (_disconnectedPlayers.Contains(idx))
+                displayEntries.Add(_turnNames[idx]);
+        }
+
+        // Göster
+        for (int i = 0; i < scoreboardTexts.Length; i++)
+        {
+            if (i < displayEntries.Count)
+                scoreboardTexts[i].text = $"{i + 1}. {displayEntries[i]}";
+            else
+                scoreboardTexts[i].text = "";
+        }
+
+        if (txtScoreboardTitle != null)
+            txtScoreboardTitle.text = _gameOver ? "Oyun Bitti!" : "Sıralama";
+
+        // X butonu: oyun devam ediyorsa göster, bittiyse gizle
+        if (btnScoreboardClose != null)
+            btnScoreboardClose.gameObject.SetActive(!_gameOver);
+
+        // Ana Menü butonu: sadece oyun bittiğinde göster
+        if (btnMainMenu != null)
+            btnMainMenu.gameObject.SetActive(_gameOver);
+
+        scoreboardPanel.SetActive(true);
+    }
+
+    private void OnScoreboardClose()
+    {
+        if (scoreboardPanel != null)
+            scoreboardPanel.SetActive(false);
+    }
+
+    private void OnMainMenuClicked()
+    {
+        if (PhotonNetwork.InRoom)
+            PhotonNetwork.LeaveRoom();
+
+        if (PhotonNetwork.IsConnected)
+            PhotonNetwork.Disconnect();
+
+        SceneManager.LoadScene(0);
     }
 
     private void DisableAllPawnClicks()
@@ -1411,6 +1602,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             }
 
             st.EnterMainAt(startIndex);
+            sfx?.PlayHomeExit();
 
             if (_pawnCurrentWaypoint.TryGetValue(pawn, out int oldWp))
                 positionManager?.UnregisterPawnFromWaypoint(pawn, oldWp);

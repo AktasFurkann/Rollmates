@@ -99,6 +99,7 @@ namespace LudoFriends.Networking
         private const string PROP_PAWN_STATES = "pawnStates";
         private const string PROP_TIMER_START_TIME = "timerStart";
         private const string PROP_TIMER_DURATION = "timerDuration";
+        private const string PROP_FINISH_ORDER = "finishOrder";
 
         /// <summary>
         /// Host saves current game state to room properties for late joiners
@@ -163,6 +164,26 @@ namespace LudoFriends.Networking
         {
             var props = PhotonNetwork.CurrentRoom.CustomProperties;
             return props.ContainsKey(PROP_PAWN_STATES) ? (string)props[PROP_PAWN_STATES] : null;
+        }
+
+        // ========== FINISH ORDER PERSISTENCE (Scoreboard) ==========
+
+        public void SaveFinishOrder(int[] finishOrder)
+        {
+            if (!PhotonNetwork.IsMasterClient) return;
+
+            var props = new ExitGames.Client.Photon.Hashtable
+            {
+                [PROP_FINISH_ORDER] = finishOrder
+            };
+
+            PhotonNetwork.CurrentRoom.SetCustomProperties(props);
+        }
+
+        public int[] GetFinishOrder()
+        {
+            var props = PhotonNetwork.CurrentRoom.CustomProperties;
+            return props.ContainsKey(PROP_FINISH_ORDER) ? (int[])props[PROP_FINISH_ORDER] : null;
         }
 
         // ========== TIMER SYNCHRONIZATION (Fix 1) ==========

@@ -11,6 +11,7 @@ public class SfxPlayer : MonoBehaviour
     [SerializeField] private AudioClip yourTurnClip;
     [SerializeField] private AudioClip finishClip;
     [SerializeField] private AudioClip clockClip;       // ✅ Süre azalma sesi
+    [SerializeField] private AudioClip homeExitClip;     // ✅ Evden çıkış sesi (6 ile)
 
     [Header("Settings")]
     [SerializeField] private AudioSource audioSource;
@@ -93,6 +94,11 @@ public class SfxPlayer : MonoBehaviour
 
         audioSource.PlayOneShot(clip, volume);
     }
+    public void PlayHomeExit()
+    {
+        PlayOneShot(homeExitClip);
+    }
+
     public void PlayYourTurn()
 {
     PlayOneShot(yourTurnClip);

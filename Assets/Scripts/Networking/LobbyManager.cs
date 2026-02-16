@@ -85,11 +85,19 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
         // Player slot'ları gizle
         HideAllPlayerSlots();
 
-        txtStatus.text = "Sunucuya bağlanılıyor...";
         if (txtCountdown != null) txtCountdown.text = "";
         if (btnStartGame != null) btnStartGame.gameObject.SetActive(false); // ✅ Enhancement 1: Hide initially
 
-        PhotonNetwork.ConnectUsingSettings();
+        if (PhotonNetwork.IsConnectedAndReady)
+        {
+            txtStatus.text = "Bağlandı!";
+            PhotonNetwork.JoinLobby();
+        }
+        else
+        {
+            txtStatus.text = "Sunucuya bağlanılıyor...";
+            PhotonNetwork.ConnectUsingSettings();
+        }
     }
 
     private void OnDestroy()
