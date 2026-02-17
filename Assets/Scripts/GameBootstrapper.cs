@@ -32,6 +32,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 [SerializeField] private HomeAreaClick homeClickYellow;
 [SerializeField] private HomeAreaClick homeClickBlue;
 
+    [Header("Board Click Area")]
+    [SerializeField] private BoardAreaClick boardAreaClick;
+
     [Header("Board")]
     [SerializeField] private BoardWaypoints boardWaypoints;
     [SerializeField] private HomeSlots homeSlots;
@@ -189,7 +192,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         _initialPlayerCount = PlayerCount;
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
+        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
         pawnSpawner.enabled = true;
@@ -229,6 +232,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         homeClickGreen?.Init(1, OnHomeAreaClicked);
         homeClickYellow?.Init(2, OnHomeAreaClicked);
         homeClickBlue?.Init(3, OnHomeAreaClicked);
+        boardAreaClick?.Init(OnBoardAreaClicked);
 
         btnRollDice.onClick.AddListener(OnRollDiceClicked);
 
@@ -332,7 +336,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         _initialPlayerCount = PlayerCount;
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
+        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
         pawnSpawner.enabled = true;
@@ -395,7 +399,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     // ✅ UpdateTurnUI artık sadece local operasyonlarda kullanılacak
     private void UpdateTurnUI()
     {
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
+        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
         if (btnRollDice != null)
             btnRollDice.interactable = (_state.CurrentTurnPlayerIndex == _localPlayerIndex)
@@ -451,7 +455,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             // Update UI
             if (hudView != null)
             {
-                hudView.SetTurn(_turnNames[turn], turn);
+                hudView.SetTurn(_turnNames[turn], turn, _localPlayerIndex);
                 if (roll > 0)
                     hudView.SetDice(roll);
                 else
@@ -627,7 +631,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             }
         }
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
+        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         sfx?.PlayDice();
 
         float elapsed = 0f;
@@ -867,7 +871,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     // ✅ Zar ve UI'ı TÜM oyuncular için güncelle
     _currentRoll = roll;
-    hudView.SetTurn(_turnNames[playerIndex], playerIndex);
+    hudView.SetTurn(_turnNames[playerIndex], playerIndex, _localPlayerIndex);
 
     // ✅ Çift zar atmayı engelle
     if (btnRollDice != null)
@@ -1000,7 +1004,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     _currentRoll = -1;
 
     hudView.SetDice(-1);
-    hudView.SetTurn(_turnNames[nextPlayerIndex], nextPlayerIndex);
+    hudView.SetTurn(_turnNames[nextPlayerIndex], nextPlayerIndex, _localPlayerIndex);
 
     if (btnRollDice != null)
     {
@@ -1155,7 +1159,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         else if (!PhotonNetwork.InRoom)
         {
             hudView.SetDice(-1);
-            hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex);
+            hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
             if (btnRollDice != null)
                 btnRollDice.interactable = !_gameOver;
@@ -2002,6 +2006,38 @@ private void OnHomeAreaClicked(int playerIndex)
     // ✅ Hamleyi gönder
     int pawnId = _pawnToId[homePawn];
     _photon?.SendMoveRequest(turn, pawnId);
+}
+
+private void OnBoardAreaClicked(Vector2 screenPos)
+{
+    if (_paused || _gameOver || _phase != TurnPhase.AwaitMove) return;
+    if (_currentRoll < 1 || _isAnimating) return;
+    if (_state.CurrentTurnPlayerIndex != _localPlayerIndex) return;
+
+    var legal = GetLegalMoves(_state.CurrentTurnPlayerIndex, _currentRoll);
+    if (legal.Count == 0) return;
+
+    // En yakın legal piyonu bul (evdekiler hariç - HomeAreaClick hallediyor)
+    PawnView nearest = null;
+    float minDist = float.MaxValue;
+
+    foreach (var pawn in legal)
+    {
+        if (_pawnStates[pawn].IsAtHome) continue;
+        Vector2 pawnScreenPos = RectTransformUtility.WorldToScreenPoint(null, pawn.transform.position);
+        float dist = Vector2.Distance(screenPos, pawnScreenPos);
+        if (dist < minDist)
+        {
+            minDist = dist;
+            nearest = pawn;
+        }
+    }
+
+    float maxDist = Screen.height * 0.08f;
+    if (nearest != null && minDist < maxDist)
+    {
+        OnPawnClicked(nearest);
+    }
 }
 
     // ✅ ========== BUG 1 FIX: PAWN STATE SERIALIZATION METHODS ==========

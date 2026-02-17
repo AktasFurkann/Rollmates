@@ -19,6 +19,13 @@ namespace LudoFriends.Presentation
 [Header("Roll Button")]
 [SerializeField] private Image rollButtonImage;     // ✅ YENİ: Roll butonunun Image'ı
 
+[Header("Dice Positions")]
+[SerializeField] private RectTransform diceContainer;  // Zar elementlerinin parent'ı
+[SerializeField] private RectTransform dicePosBottom;   // Kendi sıran (alt)
+[SerializeField] private RectTransform dicePosLeft;     // +1 oyuncu (sol)
+[SerializeField] private RectTransform dicePosTop;      // +2 oyuncu (üst)
+[SerializeField] private RectTransform dicePosRight;    // +3 oyuncu (sağ)
+
 [Header("Timer")]
 [SerializeField] private TextMeshProUGUI txtTimer;  // ✅ Geri sayım göstergesi
 
@@ -30,7 +37,7 @@ namespace LudoFriends.Presentation
             new Color(0.15f, 0.35f, 0.9f)   // Mavi
         };
 
-        public void SetTurn(string turnName, int playerIndex = -1)
+        public void SetTurn(string turnName, int playerIndex = -1, int localPlayerIndex = -1)
 {
     txtTurnInfo.text = turnName;
 
@@ -68,8 +75,31 @@ namespace LudoFriends.Presentation
         // ✅ Roll buton rengini değiştir
         if (rollButtonImage != null)
             rollButtonImage.color = c;
+
+        // Zar pozisyonunu sıradaki oyuncunun bölgesine taşı
+        if (localPlayerIndex >= 0)
+        {
+            int relativePos = (playerIndex - localPlayerIndex + 4) % 4;
+            SetDicePosition(relativePos);
+        }
     }
 }
+
+        public void SetDicePosition(int relativePosition)
+        {
+            if (diceContainer == null) return;
+
+            RectTransform target = relativePosition switch
+            {
+                1 => dicePosLeft,
+                2 => dicePosTop,
+                3 => dicePosRight,
+                _ => dicePosBottom
+            };
+
+            if (target != null)
+                diceContainer.position = target.position;
+        }
 
         public void SetDice(int value)
         {
