@@ -12,6 +12,7 @@ public class SfxPlayer : MonoBehaviour
     [SerializeField] private AudioClip finishClip;
     [SerializeField] private AudioClip clockClip;       // ✅ Süre azalma sesi
     [SerializeField] private AudioClip homeExitClip;     // ✅ Evden çıkış sesi (6 ile)
+    [SerializeField] private AudioClip gameStartClip;    // ✅ Oyun başlama sesi
 
     [Header("Settings")]
     [SerializeField] private AudioSource audioSource;
@@ -107,6 +108,11 @@ public class SfxPlayer : MonoBehaviour
 public void PlayFinish()
 {
     PlayOneShot(finishClip);
+}
+
+public void PlayGameStart()
+{
+    PlayOneShot(gameStartClip);
 }
 
 // ✅ Saat sesi (durdurulabilir)

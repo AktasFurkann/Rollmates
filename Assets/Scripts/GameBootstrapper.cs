@@ -247,6 +247,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         HighlightActivePlayerPawns();
 
+        // ✅ Oyun başlama sesi
+        sfx?.PlayGameStart();
+
         // ✅ İlk sıra için timer başlat (online + offline)
         StartTurnTimer(rollTimeLimit);
     }

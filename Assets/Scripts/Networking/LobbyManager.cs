@@ -40,6 +40,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [Header("Audio")]
     [SerializeField] private AudioSource sfxSource;
     [SerializeField] private AudioClip clickSound;
+    [SerializeField] private AudioClip gameStartSound; // ✅ Oyun başlama sesi
 
     [Header("Create Choice Panel")]
 [SerializeField] private GameObject panelCreateChoice;
