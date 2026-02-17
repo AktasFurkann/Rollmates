@@ -535,8 +535,123 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _isAnimating = false;
         _isRollingDice = false;
 
-        // OnPlayerLeftRoom henüz çalışmadı, bu yüzden burada sadece state reset yap
-        // Asıl tur ilerletme OnPlayerLeftRoom'da yapılacak
+        // Yeni host ise, host sorumluluklarını devral
+        if (newMasterClient.IsLocal)
+        {
+            Debug.Log("[OnMasterClientSwitched] I am the new host. Taking over responsibilities.");
+
+            // Tüm coroutine'leri durdur (eski host'un roll/move animasyonları)
+            StopAllCoroutines();
+
+            // Disconnected oyuncuları güncelle (odada olmayanları bul)
+            RefreshDisconnectedPlayers();
+
+            // Phase ve state'i resetle
+            _phase = TurnPhase.AwaitRoll;
+            _currentRoll = -1;
+            _consecutiveSixes = 0;
+            _extraTurnsEarned = 0;
+
+            // ✅ MoveId çakışmasını önle: Yeni host'un moveId'leri
+            // eski host'un broadcast ettiği moveId'lerle çakışmamalı
+            _processedMoves.Clear();
+            _nextMoveId = 1000 + UnityEngine.Random.Range(0, 1000);
+            _lastProcessedPawnId = -1;
+
+            // Mevcut sıradaki oyuncu disconnected ise turu ilerlet
+            if (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)
+                || _finishOrder.Contains(_state.CurrentTurnPlayerIndex))
+            {
+                AdvanceTurnAfterHostMigration();
+            }
+            else
+            {
+                // Sıradaki oyuncu hâlâ aktifse, UI güncelle ve timer başlat
+                int currentTurn = _state.CurrentTurnPlayerIndex;
+                hudView.SetTurn(_turnNames[currentTurn], currentTurn, _localPlayerIndex);
+                hudView.SetDice(-1);
+
+                if (btnRollDice != null)
+                    btnRollDice.interactable = (currentTurn == _localPlayerIndex) && !_gameOver;
+
+                HighlightActivePlayerPawns();
+                StartTurnTimer(rollTimeLimit);
+
+                // State'i kaydet
+                _photon?.SyncGameState(currentTurn, -1, (int)TurnPhase.AwaitRoll, 0, 0);
+                SerializeAndSavePawnStates();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Odadaki aktif oyuncuları kontrol ederek _disconnectedPlayers set'ini günceller.
+    /// Host migration sonrası çağrılır.
+    /// </summary>
+    private void RefreshDisconnectedPlayers()
+    {
+        HashSet<int> activeActors = new HashSet<int>();
+        foreach (var player in PhotonNetwork.PlayerList)
+        {
+            activeActors.Add(player.ActorNumber - 1);
+        }
+
+        for (int i = 0; i < _initialPlayerCount; i++)
+        {
+            if (!activeActors.Contains(i) && !_disconnectedPlayers.Contains(i))
+            {
+                _disconnectedPlayers.Add(i);
+                if (!_finishOrder.Contains(i))
+                {
+                    _finishOrder.Add(i);
+                }
+                RemoveDisconnectedPlayerPawns(i);
+                Debug.Log($"[RefreshDisconnectedPlayers] P{i} marked as disconnected");
+            }
+        }
+
+        // Scoreboard ve finish order kaydet
+        UpdateScoreboard();
+        if (PhotonNetwork.IsMasterClient)
+            _photon?.SaveFinishOrder(_finishOrder.ToArray());
+    }
+
+    /// <summary>
+    /// Host migration sonrası turu güvenli şekilde ilerletir.
+    /// </summary>
+    private void AdvanceTurnAfterHostMigration()
+    {
+        StopTurnTimer();
+
+        _state.NextTurn(_initialPlayerCount);
+
+        int safetyCount = 0;
+        while (_finishOrder.Contains(_state.CurrentTurnPlayerIndex) && safetyCount < _initialPlayerCount)
+        {
+            _state.NextTurn(_initialPlayerCount);
+            safetyCount++;
+        }
+
+        int nextTurn = _state.CurrentTurnPlayerIndex;
+        Debug.Log($"[AdvanceTurnAfterHostMigration] New turn: P{nextTurn}");
+
+        hudView.SetTurn(_turnNames[nextTurn], nextTurn, _localPlayerIndex);
+        hudView.SetDice(-1);
+
+        if (btnRollDice != null)
+            btnRollDice.interactable = (nextTurn == _localPlayerIndex) && !_gameOver;
+
+        HighlightActivePlayerPawns();
+
+        // Broadcast ve state kaydet
+        if (_photon != null)
+        {
+            _photon.BroadcastTurn(nextTurn);
+            _photon.SyncGameState(nextTurn, -1, (int)TurnPhase.AwaitRoll, 0, 0);
+            SerializeAndSavePawnStates();
+        }
+
+        StartTurnTimer(rollTimeLimit);
     }
 
     // ✅ Bug 3 fix: Handle player disconnects to prevent lockup
@@ -601,9 +716,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _isRollingDice = false;
 
         // Oyun devam ediyorsa ve çıkan kişinin sırasıysa → atla
-        if (!_gameOver && PhotonNetwork.IsMasterClient)
+        if (!_gameOver)
         {
-            if (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
+            if (PhotonNetwork.IsMasterClient && _disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
             {
                 Debug.Log($"[OnPlayerLeftRoom] Current turn player P{_state.CurrentTurnPlayerIndex} is disconnected. Advancing turn.");
                 StopTurnTimer();
@@ -646,6 +761,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 // Sıra bizdeyse timer başlat
                 if (nextTurn == _localPlayerIndex)
                     StartTurnTimer(rollTimeLimit);
+            }
+            else if (!PhotonNetwork.IsMasterClient)
+            {
+                // Non-host: Çıkan oyuncu sıradaki ise, host'un BroadcastTurn göndermesini bekle
+                // Ama UI'ı kilitlenme durumundan kurtarmak için flag'leri temizle
+                _isAnimating = false;
+                _isRollingDice = false;
+                Debug.Log($"[OnPlayerLeftRoom] Non-host: cleared stuck flags, waiting for host BroadcastTurn");
             }
         }
     }
