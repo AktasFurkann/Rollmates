@@ -54,12 +54,12 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     private readonly Color[] _playerColors = new Color[]
     {
         new Color(0.9f, 0.2f, 0.2f),  // Kırmızı
-        new Color(0.2f, 0.8f, 0.2f),  // Yeşil
-        new Color(0.95f, 0.85f, 0.1f), // Sarı
+        new Color(0.95f, 0.85f, 0.1f), // Sarı (Was Green)
+        new Color(0.2f, 0.8f, 0.2f),  // Yeşil (Was Yellow)
         new Color(0.2f, 0.4f, 0.9f)   // Mavi
     };
 
-    private readonly string[] _colorNames = { "Kırmızı", "Yeşil", "Sarı", "Mavi" };
+    private readonly string[] _colorNames = { "Kırmızı", "Sarı", "Yeşil", "Mavi" };
 
     private void Start()
     {

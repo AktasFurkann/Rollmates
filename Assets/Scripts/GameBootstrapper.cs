@@ -106,7 +106,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private bool _timerActive = false;
     private bool _clockPlayed = false; // ✅ 3 saniye sesi tekrar çalmasın diye flag
 
-    private readonly string[] _turnNames = { "Kırmızı", "Yeşil", "Sarı", "Mavi" };
+    private readonly string[] _turnNames = { "Kırmızı", "Sarı", "Yeşil", "Mavi" };
 
     private readonly Dictionary<int, PawnView> _idToPawn = new Dictionary<int, PawnView>();
     private readonly Dictionary<PawnView, int> _pawnToId = new Dictionary<PawnView, int>();
@@ -185,8 +185,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             positionManager.CacheWaypointPositions(boardWaypoints.MainPath);
             positionManager.CacheHomeLanePositions(0, boardWaypoints.HomeR);
-            positionManager.CacheHomeLanePositions(1, boardWaypoints.HomeG);
-            positionManager.CacheHomeLanePositions(2, boardWaypoints.HomeY);
+            positionManager.CacheHomeLanePositions(1, boardWaypoints.HomeY); // 1 = Yellow
+            positionManager.CacheHomeLanePositions(2, boardWaypoints.HomeG); // 2 = Green
             positionManager.CacheHomeLanePositions(3, boardWaypoints.HomeB);
         }
 
@@ -213,8 +213,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         }
 
         RegisterPawns(_redPawns, 0);
-        RegisterPawns(_greenPawns, 1);
-        RegisterPawns(_yellowPawns, 2);
+        RegisterPawns(_yellowPawns, 1); // 1 = Yellow
+        RegisterPawns(_greenPawns, 2); // 2 = Green
         RegisterPawns(_bluePawns, 3);
 
         if (winnerPanel != null)
@@ -229,8 +229,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             kv.Key.Clicked += OnPawnClicked;
 
         homeClickRed?.Init(0, OnHomeAreaClicked);
-        homeClickGreen?.Init(1, OnHomeAreaClicked);
-        homeClickYellow?.Init(2, OnHomeAreaClicked);
+        homeClickYellow?.Init(1, OnHomeAreaClicked); // 1 = Yellow
+        homeClickGreen?.Init(2, OnHomeAreaClicked); // 2 = Green
         homeClickBlue?.Init(3, OnHomeAreaClicked);
         boardAreaClick?.Init(OnBoardAreaClicked);
 
@@ -329,8 +329,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             positionManager.CacheWaypointPositions(boardWaypoints.MainPath);
             positionManager.CacheHomeLanePositions(0, boardWaypoints.HomeR);
-            positionManager.CacheHomeLanePositions(1, boardWaypoints.HomeG);
-            positionManager.CacheHomeLanePositions(2, boardWaypoints.HomeY);
+            positionManager.CacheHomeLanePositions(1, boardWaypoints.HomeY); // 1 = Yellow
+            positionManager.CacheHomeLanePositions(2, boardWaypoints.HomeG); // 2 = Green
             positionManager.CacheHomeLanePositions(3, boardWaypoints.HomeB);
         }
 
@@ -357,8 +357,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         }
 
         RegisterPawns(_redPawns, 0);
-        RegisterPawns(_greenPawns, 1);
-        RegisterPawns(_yellowPawns, 2);
+        RegisterPawns(_yellowPawns, 1); // 1 = Yellow
+        RegisterPawns(_greenPawns, 2); // 2 = Green
         RegisterPawns(_bluePawns, 3);
 
         if (winnerPanel != null)
@@ -744,7 +744,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         Debug.Log($"[CoRollDiceAnimated] Single legal move, auto-moving");
         int pawnId = _pawnToId[legal[0]];
-        _photon?.SendMoveRequest(turn2, pawnId);
+        _photon?.SendMoveRequest(turn2, pawnId, roll);
         yield break;
     }
 
@@ -790,10 +790,10 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         if (btnRollDice != null) btnRollDice.interactable = false;
 
         int pawnId = _pawnToId[pawn];
-        _photon?.SendMoveRequest(turn, pawnId);
+        _photon?.SendMoveRequest(turn, pawnId, _currentRoll);
     }
 
-    private void OnNetworkMoveRequest(int playerIndex, int pawnId)
+    private void OnNetworkMoveRequest(int playerIndex, int pawnId, int roll)
     {
         // ✅ Sadece host karar versin
         if (_photon == null || !_photon.IsHost) return;
@@ -808,6 +808,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         }
 
         if (!_idToPawn.TryGetValue(pawnId, out var pawn)) return;
+
+        // ✅ Race condition fix: Client'ın gönderdiği roll değerini kullan
+        // (BroadcastRoll All RPC'si, MoveRequest MasterClient RPC'sinden geç gelebilir)
+        if (roll > 0 && roll <= 6 && roll != _currentRoll)
+        {
+            Debug.LogWarning($"[OnNetworkMoveRequest] Roll mismatch! Host={_currentRoll}, Client={roll}. Using client roll.");
+            _currentRoll = roll;
+        }
 
         var legal = GetLegalMoves(playerIndex, _currentRoll);
         if (!legal.Contains(pawn)) return;
@@ -1195,8 +1203,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         return playerIndex switch
         {
             0 => _redPawns,
-            1 => _greenPawns,
-            2 => _yellowPawns,
+            1 => _yellowPawns,
+            2 => _greenPawns,
             3 => _bluePawns,
             _ => _redPawns
         };
@@ -1207,8 +1215,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         switch (playerIndex)
         {
             case 0: startIndex = 0; return true;   // Red: WP_00
-            case 1: startIndex = 13; return true;  // Green: WP_13
-            case 2: startIndex = 26; return true;  // Yellow: WP_26
+            case 1: startIndex = 26; return true;  // Yellow: WP_26
+            case 2: startIndex = 13; return true;  // Green: WP_13
             case 3: startIndex = 39; return true;  // Blue: WP_39
             default: startIndex = -1; return false;
         }
@@ -1320,8 +1328,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         IReadOnlyList<RectTransform> homeSlotsForColor = ownerIndex switch
         {
             0 => homeSlots.R,  // homeSlots burada field (GameBootstrapper'daki)
-            1 => homeSlots.G,
-            2 => homeSlots.Y,
+            1 => homeSlots.Y,
+            2 => homeSlots.G,
             3 => homeSlots.B,
             _ => null
         };
@@ -1345,8 +1353,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         return playerIndex switch
         {
             0 => 50,
-            1 => 11,
-            2 => 24,
+            1 => 24,
+            2 => 11,
             3 => 37,
             _ => 50
         };
@@ -1357,8 +1365,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         return playerIndex switch
         {
             0 => boardWaypoints.HomeR,
-            1 => boardWaypoints.HomeG,
-            2 => boardWaypoints.HomeY,
+            1 => boardWaypoints.HomeY,
+            2 => boardWaypoints.HomeG,
             3 => boardWaypoints.HomeB,
             _ => boardWaypoints.HomeR
         };
@@ -1944,7 +1952,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         PawnView chosen = legal[Random.Range(0, legal.Count)];
         int pawnId = _pawnToId[chosen];
         Debug.Log($"[Timer] Auto-moving pawn {pawnId} for P{turn}");
-        _photon?.SendMoveRequest(turn, pawnId);
+        _photon?.SendMoveRequest(turn, pawnId, _currentRoll);
     }
 private int GetHomeLaneKey(int playerIndex, int homeIndex)
 {
@@ -2005,7 +2013,7 @@ private void OnHomeAreaClicked(int playerIndex)
 
     // ✅ Hamleyi gönder
     int pawnId = _pawnToId[homePawn];
-    _photon?.SendMoveRequest(turn, pawnId);
+    _photon?.SendMoveRequest(turn, pawnId, _currentRoll);
 }
 
 private void OnBoardAreaClicked(Vector2 screenPos)

@@ -7,7 +7,7 @@ namespace LudoFriends.Networking
         event Action<int, int> OnRoll;
         event Action<int, int, int, int> OnMove; // ✅ moveId parametresi eklendi
         event Action<int> OnTurn;
-        event Action<int, int> OnMoveRequest;
+        event Action<int, int, int> OnMoveRequest; // playerIndex, pawnId, roll
         event Action OnRequestAdvanceTurn;
         event Action<int> OnRollRequest; // ✅ YENİ
         event Action<float> OnTimerStart;  // ✅ NEW: Timer sync events
@@ -19,7 +19,7 @@ namespace LudoFriends.Networking
         void BroadcastRoll(int playerIndex, int roll);
         void BroadcastMove(int playerIndex, int pawnId, int roll, int moveId); // ✅ moveId parametresi eklendi
         void BroadcastTurn(int nextPlayerIndex);
-        void SendMoveRequest(int playerIndex, int pawnId);
+        void SendMoveRequest(int playerIndex, int pawnId, int roll);
         void RequestAdvanceTurn();
 
         // ✅ State Persistence Methods (Bug 1 fix)

@@ -15,7 +15,14 @@ namespace LudoFriends.Presentation
         /// </summary>
         public void ApplyRotation(int localPlayerIndex)
         {
-            float angle = localPlayerIndex * 90f;
+            float angle = 0f;
+            switch (localPlayerIndex)
+            {
+                case 0: angle = 0f; break;   // Red -> 0
+                case 1: angle = 180f; break; // Yellow -> 180
+                case 2: angle = 90f; break;  // Green -> 90
+                case 3: angle = 270f; break; // Blue -> 270
+            }
             Rect.localRotation = Quaternion.Euler(0f, 0f, angle);
         }
 
@@ -24,7 +31,15 @@ namespace LudoFriends.Presentation
         /// </summary>
         public static Quaternion GetCounterRotation(int localPlayerIndex)
         {
-            return Quaternion.Euler(0f, 0f, -(localPlayerIndex * 90f));
+            float angle = 0f;
+            switch (localPlayerIndex)
+            {
+                case 0: angle = 0f; break;
+                case 1: angle = 180f; break;
+                case 2: angle = 90f; break;
+                case 3: angle = 270f; break;
+            }
+            return Quaternion.Euler(0f, 0f, -angle);
         }
     }
 }

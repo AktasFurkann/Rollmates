@@ -32,8 +32,8 @@ namespace LudoFriends.Presentation
         private readonly Color[] _turnColors = new Color[]
         {
             new Color(0.9f, 0.15f, 0.15f),  // Kırmızı
-            new Color(0.1f, 0.75f, 0.1f),   // Yeşil
-            new Color(0.95f, 0.85f, 0.0f),  // Sarı
+            new Color(0.95f, 0.85f, 0.0f),  // Sarı (Was Green)
+            new Color(0.1f, 0.75f, 0.1f),   // Yeşil (Was Yellow)
             new Color(0.15f, 0.35f, 0.9f)   // Mavi
         };
 
@@ -79,7 +79,24 @@ namespace LudoFriends.Presentation
         // Zar pozisyonunu sıradaki oyuncunun bölgesine taşı
         if (localPlayerIndex >= 0)
         {
-            int relativePos = (playerIndex - localPlayerIndex + 4) % 4;
+            // ✅ Açıya göre pozisyon belirleme (turn sırası artık dairesel değil)
+            float playerAngle = GetPlayerAngle(playerIndex);
+            float localAngle = GetPlayerAngle(localPlayerIndex);
+
+            // Farkı hesapla (0, 90, 180, 270)
+            float diff = (playerAngle - localAngle + 360f) % 360f;
+
+            // Diff -> Relative Position mapping
+            // 0 -> Me (Bottom) -> 0
+            // 90 -> Left -> 1
+            // 180 -> Top -> 2
+            // 270 -> Right -> 3
+
+            int relativePos = 0;
+            if (Mathf.Approximately(diff, 90f)) relativePos = 1;
+            else if (Mathf.Approximately(diff, 180f)) relativePos = 2;
+            else if (Mathf.Approximately(diff, 270f)) relativePos = 3;
+
             SetDicePosition(relativePos);
         }
     }
@@ -124,6 +141,17 @@ namespace LudoFriends.Presentation
         {
             if (txtTimer != null)
                 txtTimer.text = "";
+        }
+
+        private float GetPlayerAngle(int playerIndex)
+        {
+            // 0: Red (0)
+            // 1: Yellow (180 - Opposite)
+            // 2: Green (90 - Left)
+            // 3: Blue (270 - Right)
+            if (playerIndex == 1) return 180f;
+            if (playerIndex == 2) return 90f;
+            return playerIndex * 90f;
         }
     }
 }

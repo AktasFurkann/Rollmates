@@ -9,7 +9,7 @@ namespace LudoFriends.Networking
         public event Action<int, int> OnRoll;
         public event Action<int, int, int, int> OnMove; // ✅ moveId parametresi eklendi
         public event Action<int> OnTurn;
-        public event Action<int, int> OnMoveRequest;
+        public event Action<int, int, int> OnMoveRequest;
         public event Action OnRequestAdvanceTurn;
         public event Action<int> OnRollRequest; // ✅ YENİ
 
@@ -64,16 +64,16 @@ namespace LudoFriends.Networking
             OnTurn?.Invoke(nextPlayerIndex);
         }
 
-        public void SendMoveRequest(int playerIndex, int pawnId)
+        public void SendMoveRequest(int playerIndex, int pawnId, int roll)
         {
-            photonView.RPC(nameof(RPC_MoveRequest), RpcTarget.MasterClient, playerIndex, pawnId);
+            photonView.RPC(nameof(RPC_MoveRequest), RpcTarget.MasterClient, playerIndex, pawnId, roll);
         }
 
         [PunRPC]
-        private void RPC_MoveRequest(int playerIndex, int pawnId)
+        private void RPC_MoveRequest(int playerIndex, int pawnId, int roll)
         {
-            Debug.Log($"[RPC_MoveRequest] P{playerIndex} wants pawn {pawnId}");
-            OnMoveRequest?.Invoke(playerIndex, pawnId);
+            Debug.Log($"[RPC_MoveRequest] P{playerIndex} wants pawn {pawnId} with roll {roll}");
+            OnMoveRequest?.Invoke(playerIndex, pawnId, roll);
         }
 
         public void RequestAdvanceTurn()
