@@ -217,6 +217,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         RegisterPawns(_greenPawns, 2); // 2 = Green
         RegisterPawns(_bluePawns, 3);
 
+        HideUnusedColorPawns();
+
         if (winnerPanel != null)
             winnerPanel.SetActive(false);
 
@@ -360,6 +362,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         RegisterPawns(_yellowPawns, 1); // 1 = Yellow
         RegisterPawns(_greenPawns, 2); // 2 = Green
         RegisterPawns(_bluePawns, 3);
+
+        HideUnusedColorPawns();
 
         if (winnerPanel != null)
             winnerPanel.SetActive(false);
@@ -520,6 +524,21 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         }
     }
 
+    public override void OnMasterClientSwitched(Photon.Realtime.Player newMasterClient)
+    {
+        base.OnMasterClientSwitched(newMasterClient);
+        Debug.Log($"[OnMasterClientSwitched] New host: {newMasterClient.ActorNumber}, IsLocal={newMasterClient.IsLocal}");
+
+        if (_gameOver) return;
+
+        // Stuck state'leri temizle
+        _isAnimating = false;
+        _isRollingDice = false;
+
+        // OnPlayerLeftRoom henüz çalışmadı, bu yüzden burada sadece state reset yap
+        // Asıl tur ilerletme OnPlayerLeftRoom'da yapılacak
+    }
+
     // ✅ Bug 3 fix: Handle player disconnects to prevent lockup
     public override void OnPlayerLeftRoom(Photon.Realtime.Player otherPlayer)
     {
@@ -537,6 +556,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             Debug.Log($"[OnPlayerLeftRoom] P{leftPlayerIndex} added to finish order as #{_finishOrder.Count}");
         }
         _disconnectedPlayers.Add(leftPlayerIndex);
+
+        // Çıkan oyuncunun piyonlarını tahtadan kaldır
+        RemoveDisconnectedPlayerPawns(leftPlayerIndex);
 
         // Kaç aktif (bitmemiş) oyuncu kaldı?
         int totalPlayers = _initialPlayerCount;
@@ -574,16 +596,90 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         if (PhotonNetwork.IsMasterClient)
             _photon?.SaveFinishOrder(_finishOrder.ToArray());
 
+        // Stuck state'leri temizle
+        _isAnimating = false;
+        _isRollingDice = false;
+
         // Oyun devam ediyorsa ve çıkan kişinin sırasıysa → atla
         if (!_gameOver && PhotonNetwork.IsMasterClient)
         {
-            if (leftPlayerIndex == _state.CurrentTurnPlayerIndex)
+            if (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
             {
-                Debug.Log($"[OnPlayerLeftRoom] Current turn player {leftPlayerIndex} disconnected. Advancing turn.");
+                Debug.Log($"[OnPlayerLeftRoom] Current turn player P{_state.CurrentTurnPlayerIndex} is disconnected. Advancing turn.");
                 StopTurnTimer();
-                AdvanceTurnInternalOnly();
+                _extraTurnsEarned = 0;
+
+                // Turu ilerlet ve lokal state'i de güncelle (RPC kendine ulaşmayabilir)
+                _phase = TurnPhase.AwaitRoll;
+                _currentRoll = -1;
+                _consecutiveSixes = 0;
+
+                _state.NextTurn(_initialPlayerCount);
+
+                int safetyCount = 0;
+                while (_finishOrder.Contains(_state.CurrentTurnPlayerIndex) && safetyCount < _initialPlayerCount)
+                {
+                    _state.NextTurn(_initialPlayerCount);
+                    safetyCount++;
+                }
+
+                int nextTurn = _state.CurrentTurnPlayerIndex;
+                Debug.Log($"[OnPlayerLeftRoom] New turn: P{nextTurn}");
+
+                // UI'ı güncelle
+                hudView.SetTurn(_turnNames[nextTurn], nextTurn, _localPlayerIndex);
+                hudView.SetDice(-1);
+
+                if (btnRollDice != null)
+                    btnRollDice.interactable = (nextTurn == _localPlayerIndex) && !_gameOver;
+
+                HighlightActivePlayerPawns();
+
+                // Diğer client'lara da broadcast et
+                if (_photon != null)
+                {
+                    _photon.BroadcastTurn(nextTurn);
+                    _photon.SyncGameState(nextTurn, -1, (int)TurnPhase.AwaitRoll, 0, _extraTurnsEarned);
+                    SerializeAndSavePawnStates();
+                }
+
+                // Sıra bizdeyse timer başlat
+                if (nextTurn == _localPlayerIndex)
+                    StartTurnTimer(rollTimeLimit);
             }
         }
+    }
+
+    private void HideUnusedColorPawns()
+    {
+        for (int i = _initialPlayerCount; i < 4; i++)
+        {
+            var pawns = GetPawnsForTurn(i);
+            foreach (var pawn in pawns)
+            {
+                pawn.gameObject.SetActive(false);
+                _pawnStates[pawn].SetFinished();
+            }
+            Debug.Log($"[HideUnusedColorPawns] P{i} pawns hidden (no player).");
+        }
+    }
+
+    private void RemoveDisconnectedPlayerPawns(int playerIndex)
+    {
+        var pawns = GetPawnsForTurn(playerIndex);
+        foreach (var pawn in pawns)
+        {
+            if (_pawnCurrentWaypoint.TryGetValue(pawn, out int wp))
+            {
+                positionManager?.UnregisterPawnFromWaypoint(pawn, wp);
+                _pawnCurrentWaypoint.Remove(pawn);
+            }
+
+            pawnMover.StopMove(pawn);
+            pawn.gameObject.SetActive(false);
+            _pawnStates[pawn].SetFinished();
+        }
+        Debug.Log($"[RemoveDisconnectedPlayerPawns] P{playerIndex} pawns removed from board.");
     }
 
     // ✅ Zar atma: Sadece kendi sıran ise atabilirsin

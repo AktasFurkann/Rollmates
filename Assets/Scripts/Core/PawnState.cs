@@ -54,6 +54,15 @@ public void AdvanceHome(int steps)
             MainIndex = (MainIndex + steps) % mainCount;
         }
 
+        public void SetFinished()
+        {
+            Zone = PawnZone.Finished;
+            IsFinished = true;
+            IsInHomeLane = false;
+            MainIndex = -1;
+            HomeIndex = -1;
+        }
+
         public void ReturnHome()
 {
     Zone = PawnZone.Home;

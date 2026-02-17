@@ -18,7 +18,10 @@ namespace LudoFriends.Networking
         // ✅ YENİ: Client zar atma isteği gönderir
         public void SendRollRequest(int playerIndex)
         {
-            photonView.RPC(nameof(RPC_RollRequest), RpcTarget.MasterClient, playerIndex);
+            if (PhotonNetwork.IsMasterClient)
+                OnRollRequest?.Invoke(playerIndex);
+            else
+                photonView.RPC(nameof(RPC_RollRequest), RpcTarget.MasterClient, playerIndex);
         }
 
         [PunRPC]
@@ -66,7 +69,10 @@ namespace LudoFriends.Networking
 
         public void SendMoveRequest(int playerIndex, int pawnId, int roll)
         {
-            photonView.RPC(nameof(RPC_MoveRequest), RpcTarget.MasterClient, playerIndex, pawnId, roll);
+            if (PhotonNetwork.IsMasterClient)
+                OnMoveRequest?.Invoke(playerIndex, pawnId, roll);
+            else
+                photonView.RPC(nameof(RPC_MoveRequest), RpcTarget.MasterClient, playerIndex, pawnId, roll);
         }
 
         [PunRPC]
@@ -78,7 +84,10 @@ namespace LudoFriends.Networking
 
         public void RequestAdvanceTurn()
         {
-            photonView.RPC(nameof(RPC_RequestAdvanceTurn), RpcTarget.MasterClient);
+            if (PhotonNetwork.IsMasterClient)
+                OnRequestAdvanceTurn?.Invoke();
+            else
+                photonView.RPC(nameof(RPC_RequestAdvanceTurn), RpcTarget.MasterClient);
         }
 
         [PunRPC]
