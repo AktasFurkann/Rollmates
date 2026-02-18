@@ -2419,6 +2419,7 @@ private void OnBoardAreaClicked(Vector2 screenPos)
         }
 
         Debug.Log($"[RestorePawnStates] Restored {restored} pawns from network");
+        if (positionManager != null) positionManager.RefreshAllStacks();
     }
 
     /// <summary>

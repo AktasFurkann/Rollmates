@@ -10,8 +10,8 @@ namespace LudoFriends.Gameplay
     public class PawnPositionManager : MonoBehaviour
     {
         [Header("Stack Config")]
-        [SerializeField] private float baseStackOffsetX = 20f;  // Yan mesafe
-        [SerializeField] private float baseStackOffsetY = 20f;  // Dikey mesafe
+        [SerializeField] private float stackOffsetRatio = 0.45f; // Hücre genişliğinin oranı
+        private float _cachedCellWidth = 40f;
 
         [Header("Scaling")]
         [SerializeField] private float normalScale = 1f;        // Tek pawn
@@ -28,7 +28,7 @@ namespace LudoFriends.Gameplay
         /// <summary>
         /// Waypoint pozisyonlarını önbelleğe al
         /// </summary>
-        public void CacheWaypointPositions(IReadOnlyList<Transform> waypoints)
+        public void CacheWaypointPositions(IReadOnlyList<RectTransform> waypoints)
         {
             _waypointPositions.Clear();
 
@@ -36,6 +36,10 @@ namespace LudoFriends.Gameplay
             {
                 _waypointPositions[i] = waypoints[i].position;
             }
+
+            // Hücre boyutunu ekran koordinatlarında ölç (bir kez)
+            if (waypoints.Count > 0)
+                _cachedCellWidth = waypoints[0].rect.width * waypoints[0].lossyScale.x;
         }
 
 /// <summary>
@@ -115,33 +119,28 @@ public static int GetHomeLaneKey(int playerIndex, int homeIndex)
         /// Belirli bir waypoint'teki pawnları akıllı dizle
         /// </summary>
         private void UpdateStackAtWaypoint(int waypointIndex)
-{
-    if (!_pawnsByWaypoint.TryGetValue(waypointIndex, out var pawns))
-        return;
+        {
+            if (!_pawnsByWaypoint.TryGetValue(waypointIndex, out var pawns))
+                return;
 
-    if (!_waypointPositions.TryGetValue(waypointIndex, out var basePos))
-        return;
+            if (!_waypointPositions.TryGetValue(waypointIndex, out var basePos))
+                return;
 
-    int count = pawns.Count;
+            int count = pawns.Count;
 
-    // ✅ Ölçek belirle
-    float scale = GetScaleForCount(count);
+            float scale = GetScaleForCount(count);
 
-    // ✅ Layout belirle
-    var layout = GetLayoutForCount(count);
+            float ox = _cachedCellWidth * stackOffsetRatio;
+            float oy = _cachedCellWidth * stackOffsetRatio;
 
-    // ✅ Her pawn için pozisyon + stack scale uygula
-    for (int i = 0; i < count && i < layout.Count; i++)
-    {
-        Vector3 offset = layout[i];
-        Vector3 finalPos = basePos + offset;
+            var layout = GetLayoutForCount(count, ox, oy);
 
-        pawns[i].SetPosition(finalPos);
-
-        // ✅ Stack scale'i pawn'a bildir (highlight sistem bunu kullanacak)
-        pawns[i].SetStackScale(scale);
-    }
-}
+            for (int i = 0; i < count && i < layout.Count; i++)
+            {
+                pawns[i].SetPosition(basePos + layout[i]);
+                pawns[i].SetStackScale(scale);
+            }
+        }
 
         /// <summary>
         /// Pawn sayısına göre scale döndür
@@ -160,7 +159,7 @@ public static int GetHomeLaneKey(int playerIndex, int homeIndex)
         /// <summary>
         /// Pawn sayısına göre layout (offset listesi) döndür
         /// </summary>
-        private List<Vector3> GetLayoutForCount(int count)
+        private List<Vector3> GetLayoutForCount(int count, float ox, float oy)
         {
             switch (count)
             {
@@ -172,38 +171,38 @@ public static int GetHomeLaneKey(int playerIndex, int homeIndex)
                     // Yan yana (sol-sağ)
                     return new List<Vector3>
                     {
-                        new Vector3(-baseStackOffsetX / 2f, 0, 0),  // Sol
-                        new Vector3(baseStackOffsetX / 2f, 0, 0)    // Sağ
+                        new Vector3(-ox / 2f, 0, 0),  // Sol
+                        new Vector3(ox / 2f, 0, 0)    // Sağ
                     };
 
                 case 3:
                     // Üstte 2, altta 1 (sol)
                     return new List<Vector3>
                     {
-                        new Vector3(-baseStackOffsetX / 2f, baseStackOffsetY / 2f, 0),  // Sol üst
-                        new Vector3(baseStackOffsetX / 2f, baseStackOffsetY / 2f, 0),   // Sağ üst
-                        new Vector3(-baseStackOffsetX / 2f, -baseStackOffsetY / 2f, 0)  // Sol alt
+                        new Vector3(-ox / 2f, oy / 2f, 0),  // Sol üst
+                        new Vector3(ox / 2f, oy / 2f, 0),   // Sağ üst
+                        new Vector3(-ox / 2f, -oy / 2f, 0)  // Sol alt
                     };
 
                 case 4:
                     // 2x2 grid
                     return new List<Vector3>
                     {
-                        new Vector3(-baseStackOffsetX / 2f, baseStackOffsetY / 2f, 0),   // Sol üst
-                        new Vector3(baseStackOffsetX / 2f, baseStackOffsetY / 2f, 0),    // Sağ üst
-                        new Vector3(-baseStackOffsetX / 2f, -baseStackOffsetY / 2f, 0),  // Sol alt
-                        new Vector3(baseStackOffsetX / 2f, -baseStackOffsetY / 2f, 0)    // Sağ alt
+                        new Vector3(-ox / 2f, oy / 2f, 0),   // Sol üst
+                        new Vector3(ox / 2f, oy / 2f, 0),    // Sağ üst
+                        new Vector3(-ox / 2f, -oy / 2f, 0),  // Sol alt
+                        new Vector3(ox / 2f, -oy / 2f, 0)    // Sağ alt
                     };
 
                 case 5:
                     // 3x2: Sol üst, orta üst, sağ üst, sol alt, orta alt
                     return new List<Vector3>
                     {
-                        new Vector3(-baseStackOffsetX, baseStackOffsetY / 2f, 0),   // Sol üst
-                        new Vector3(0, baseStackOffsetY / 2f, 0),                   // Orta üst
-                        new Vector3(baseStackOffsetX, baseStackOffsetY / 2f, 0),    // Sağ üst
-                        new Vector3(-baseStackOffsetX / 2f, -baseStackOffsetY / 2f, 0), // Sol alt
-                        new Vector3(baseStackOffsetX / 2f, -baseStackOffsetY / 2f, 0)   // Sağ alt
+                        new Vector3(-ox, oy / 2f, 0),   // Sol üst
+                        new Vector3(0, oy / 2f, 0),     // Orta üst
+                        new Vector3(ox, oy / 2f, 0),    // Sağ üst
+                        new Vector3(-ox / 2f, -oy / 2f, 0), // Sol alt
+                        new Vector3(ox / 2f, -oy / 2f, 0)   // Sağ alt
                     };
 
                 case 6:
@@ -211,14 +210,64 @@ public static int GetHomeLaneKey(int playerIndex, int homeIndex)
                     // 3x2: 3 üst, 3 alt
                     return new List<Vector3>
                     {
-                        new Vector3(-baseStackOffsetX, baseStackOffsetY / 2f, 0),   // Sol üst
-                        new Vector3(0, baseStackOffsetY / 2f, 0),                   // Orta üst
-                        new Vector3(baseStackOffsetX, baseStackOffsetY / 2f, 0),    // Sağ üst
-                        new Vector3(-baseStackOffsetX, -baseStackOffsetY / 2f, 0),  // Sol alt
-                        new Vector3(0, -baseStackOffsetY / 2f, 0),                  // Orta alt
-                        new Vector3(baseStackOffsetX, -baseStackOffsetY / 2f, 0)    // Sağ alt
+                        new Vector3(-ox, oy / 2f, 0),   // Sol üst
+                        new Vector3(0, oy / 2f, 0),     // Orta üst
+                        new Vector3(ox, oy / 2f, 0),    // Sağ üst
+                        new Vector3(-ox, -oy / 2f, 0),  // Sol alt
+                        new Vector3(0, -oy / 2f, 0),    // Orta alt
+                        new Vector3(ox, -oy / 2f, 0)    // Sağ alt
                     };
             }
+        }
+
+        private void OnEnable()
+        {
+            Canvas.willRenderCanvases += RefreshStackedWaypoints;
+        }
+
+        private void OnDisable()
+        {
+            Canvas.willRenderCanvases -= RefreshStackedWaypoints;
+        }
+
+        /// <summary>
+        /// Sadece pozisyon günceller — SetStackScale çağırmaz, pulse animasyonunu ezmez.
+        /// </summary>
+        private void ApplyPositionsAtWaypoint(int waypointIndex)
+        {
+            if (!_pawnsByWaypoint.TryGetValue(waypointIndex, out var pawns)) return;
+            if (!_waypointPositions.TryGetValue(waypointIndex, out var basePos)) return;
+
+            int count = pawns.Count;
+            float ox = _cachedCellWidth * stackOffsetRatio;
+            float oy = _cachedCellWidth * stackOffsetRatio;
+            var layout = GetLayoutForCount(count, ox, oy);
+
+            for (int i = 0; i < count && i < layout.Count; i++)
+                pawns[i].SetPosition(basePos + layout[i]);
+        }
+
+        /// <summary>
+        /// Rendering öncesi her frame, 2+ piyon içeren waypoint'lerin stack pozisyonlarını zorla uygula.
+        /// LayoutGroup veya başka bir şey pozisyonları sıfırlamış olsa bile bu düzeltir.
+        /// Scale'e dokunmaz → pulse animasyonu çalışmaya devam eder.
+        /// </summary>
+        private void RefreshStackedWaypoints()
+        {
+            foreach (var kvp in _pawnsByWaypoint)
+            {
+                if (kvp.Value.Count >= 2)
+                    ApplyPositionsAtWaypoint(kvp.Key);
+            }
+        }
+
+        /// <summary>
+        /// Tüm kayıtlı waypoint'lerin stack pozisyonlarını yenile (RestorePawnStates sonrası gibi durumlarda çağrılır).
+        /// </summary>
+        public void RefreshAllStacks()
+        {
+            foreach (var kvp in _pawnsByWaypoint)
+                UpdateStackAtWaypoint(kvp.Key);
         }
 
         /// <summary>
