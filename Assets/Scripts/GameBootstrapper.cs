@@ -50,6 +50,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private bool _isRollingDice = false;
     private bool _isAnimating = false;
+    private Coroutine _animationSafetyTimer;
     [SerializeField] private float diceRollDuration = 0.5f;
     [SerializeField] private float diceTickInterval = 0.12f;
 
@@ -1186,6 +1187,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     private void OnNetworkMove(int playerIndex, int pawnId, int roll, int moveId) // ✅ Bug 2: moveId parametresi eklendi
     {
         StopTurnTimer(); // ✅ Timer durdur (senkronizasyon güvenliği)
+
+        // ✅ FIX: Önceki animasyon sıkışmışsa temizle (yeni move geldiğine göre önceki tamamlanmış olmalı)
+        _isAnimating = false;
+
         Debug.Log($"[RPC RECEIVED] Move: P{playerIndex} pawn {pawnId} with roll {roll}, moveId={moveId}");
 
         // ✅ Bug 2 fix: Deduplication check
@@ -1222,6 +1227,9 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 {
     Debug.Log($"[RPC RECEIVED] Turn: Now P{nextPlayerIndex} ({_turnNames[nextPlayerIndex]})");
 
+    // ✅ FIX: Animasyon flag'lerini sıfırla (host animasyonu client'tan önce bitebilir, race condition)
+    _isAnimating = false;
+
     // ✅ Gerçek sıra değişimi mi, yoksa extra turn mı?
     if (nextPlayerIndex != _state.CurrentTurnPlayerIndex)
     {
@@ -1255,7 +1263,19 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     // ✅ Zar atma timer'ı başlat
     StartTurnTimer(rollTimeLimit);
+
+    // ✅ FIX: Client'lar her sıra değişiminde host state'ini doğrula (desync önleme)
+    if (!PhotonNetwork.IsMasterClient && PhotonNetwork.InRoom)
+    {
+        StartCoroutine(VerifyPawnStatesAfterDelay(0.5f));
+    }
 }
+
+    private IEnumerator VerifyPawnStatesAfterDelay(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        RestorePawnStatesFromNetwork();
+    }
 
     // ========== TIMER NETWORK HANDLERS (Fix 1) ==========
 
@@ -1454,6 +1474,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (movedState.IsFinished) return;
 
         int landingIndex = movedState.MainIndex;
+
+        Debug.Log($"[ResolveCaptures] Checking at MainIndex={landingIndex} for P{_pawnOwner[movedPawn]}");
 
         if (safeSquares != null && safeSquares.IsSafeIndex(landingIndex))
             return;
@@ -1819,6 +1841,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         DisableAllPawnClicks();
         if (btnRollDice != null) btnRollDice.interactable = false;
 
+        // ✅ FIX: Animasyon güvenlik zaman aşımı (sıkışma önleme)
+        if (_animationSafetyTimer != null) StopCoroutine(_animationSafetyTimer);
+        _animationSafetyTimer = StartCoroutine(AnimationSafetyTimeout(5f));
+
         var st = _pawnStates[pawn];
 
         // ==================== EVDEN ÇIKIŞ ====================
@@ -1848,6 +1874,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
             ResolveCaptures(pawn);
             _isAnimating = false; // ✅ No animation for home exit, reset flag
+            CancelAnimationSafetyTimer();
             FinishMove();
             return;
         }
@@ -1902,6 +1929,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             positionManager?.RegisterPawnAtWaypoint(pawn, newKey);
 
             _isAnimating = false;
+            CancelAnimationSafetyTimer();
             FinishMove();
         });
             return;
@@ -1932,6 +1960,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             st.AdvanceMain(roll, pathCount);
             int targetIndex = st.MainIndex;
 
+            Debug.Log($"[ApplyMove] P{playerIndex} MainPath: from={from}, roll={roll}, target={targetIndex}, distToEntry={distToEntry}, steps={positions.Count}");
+
             // ✅ _isAnimating already set at method start, removed redundant lines
 
             pawnMover.MoveAlongPositions(pawn, positions, () =>
@@ -1940,6 +1970,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
                 positionManager?.RegisterPawnAtWaypoint(pawn, targetIndex);
                 ResolveCaptures(pawn);
                 _isAnimating = false;
+                CancelAnimationSafetyTimer();
                 FinishMove();
             });
             return;
@@ -2003,8 +2034,30 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         positionManager?.RegisterPawnAtWaypoint(pawn, homeKey);
 
         _isAnimating = false;
+        CancelAnimationSafetyTimer();
         FinishMove();
     });
+    }
+
+    private void CancelAnimationSafetyTimer()
+    {
+        if (_animationSafetyTimer != null)
+        {
+            StopCoroutine(_animationSafetyTimer);
+            _animationSafetyTimer = null;
+        }
+    }
+
+    private IEnumerator AnimationSafetyTimeout(float maxDuration)
+    {
+        yield return new WaitForSeconds(maxDuration);
+        if (_isAnimating)
+        {
+            Debug.LogWarning("[AnimationSafetyTimeout] Animation stuck! Force resetting.");
+            _isAnimating = false;
+            _isRollingDice = false;
+            _animationSafetyTimer = null;
+        }
     }
 
     public void SetPaused(bool paused)
