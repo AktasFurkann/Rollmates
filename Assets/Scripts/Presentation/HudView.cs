@@ -29,6 +29,12 @@ namespace LudoFriends.Presentation
 [Header("Timer")]
 [SerializeField] private TextMeshProUGUI txtTimer;  // ✅ Geri sayım göstergesi
 
+[Header("Player Corner Panels")]
+[SerializeField] private PlayerCornerPanel panelCornerBottom;  // Yerel oyuncu
+[SerializeField] private PlayerCornerPanel panelCornerLeft;
+[SerializeField] private PlayerCornerPanel panelCornerTop;
+[SerializeField] private PlayerCornerPanel panelCornerRight;
+
         private readonly Color[] _turnColors = new Color[]
         {
             new Color(0.9f, 0.15f, 0.15f),  // Kırmızı
@@ -114,8 +120,17 @@ namespace LudoFriends.Presentation
                 _ => dicePosBottom
             };
 
-            if (target != null)
-                diceContainer.position = target.position;
+            if (target == null) return;
+
+            // Pivot/anchor farkından bağımsız: görsel merkezi hizala
+            Vector3[] c = new Vector3[4];
+            target.GetWorldCorners(c);
+            Vector3 targetCenter = (c[0] + c[2]) * 0.5f;
+
+            diceContainer.GetWorldCorners(c);
+            Vector3 diceCenter = (c[0] + c[2]) * 0.5f;
+
+            diceContainer.position += targetCenter - diceCenter;
         }
 
         public void SetDice(int value)
@@ -141,6 +156,40 @@ namespace LudoFriends.Presentation
         {
             if (txtTimer != null)
                 txtTimer.text = "";
+        }
+
+        /// <summary>
+        /// Oyuncu köşe panellerini kurar.
+        /// Her oyuncuyu yerel oyuncuya göre göreceli konuma (bottom/left/top/right) yerleştirir.
+        /// İleride gerçek profil fotoğrafı için panel.SetPhoto(tex) çağrılabilir.
+        /// </summary>
+        public void SetupPlayerCorners(string[] playerNames, int localPlayerIndex, int playerCount)
+        {
+            // Önce hepsini gizle
+            panelCornerBottom?.Hide();
+            panelCornerLeft?.Hide();
+            panelCornerTop?.Hide();
+            panelCornerRight?.Hide();
+
+            for (int i = 0; i < playerCount && i < playerNames.Length; i++)
+            {
+                float playerAngle = GetPlayerAngle(i);
+                float localAngle  = GetPlayerAngle(localPlayerIndex);
+                float diff = (playerAngle - localAngle + 360f) % 360f;
+
+                // diff → göreceli konum
+                // 0°   → bottom (ben)
+                // 90°  → left
+                // 180° → top
+                // 270° → right
+                PlayerCornerPanel panel = null;
+                if (Mathf.Approximately(diff, 0f))   panel = panelCornerBottom;
+                else if (Mathf.Approximately(diff, 90f))  panel = panelCornerLeft;
+                else if (Mathf.Approximately(diff, 180f)) panel = panelCornerTop;
+                else if (Mathf.Approximately(diff, 270f)) panel = panelCornerRight;
+
+                panel?.Show(playerNames[i], _turnColors[i]);
+            }
         }
 
         private float GetPlayerAngle(int playerIndex)

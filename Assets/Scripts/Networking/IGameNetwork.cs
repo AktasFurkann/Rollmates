@@ -36,5 +36,9 @@ namespace LudoFriends.Networking
         void SaveTimerState(double startTime, float duration);
         bool TryGetTimerState(out double startTime, out float duration);
         void ClearTimerState();
+
+        // Chat
+        event Action<string, int> OnChatMessage; // (message, senderPlayerIndex)
+        void BroadcastChatMessage(string message, int senderPlayerIndex);
     }
 }

@@ -13,6 +13,7 @@ public class SfxPlayer : MonoBehaviour
     [SerializeField] private AudioClip clockClip;       // ✅ Süre azalma sesi
     [SerializeField] private AudioClip homeExitClip;     // ✅ Evden çıkış sesi (6 ile)
     [SerializeField] private AudioClip gameStartClip;    // ✅ Oyun başlama sesi
+    [SerializeField] private AudioClip chatNotificationClip; // Mesaj bildirim sesi
 
     [Header("Settings")]
     [SerializeField] private AudioSource audioSource;
@@ -142,6 +143,11 @@ public void StopClock()
 {
     if (_clockSource != null && _clockSource.isPlaying)
         _clockSource.Stop();
+}
+
+public void PlayChatNotification()
+{
+    PlayOneShot(chatNotificationClip);
 }
 
 }

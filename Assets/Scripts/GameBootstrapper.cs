@@ -97,6 +97,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [Header("Audio")]
     [SerializeField] private SfxPlayer sfx;
 
+    [Header("Chat")]
+    [SerializeField] private ChatView chatView;
+
     [Header("Board Rotation")]
     [SerializeField] private BoardRotator boardRotator;
 
@@ -155,6 +158,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _photon.OnTurn += OnNetworkTurn;
             _photon.OnMoveRequest += OnNetworkMoveRequest;
             _photon.OnRequestAdvanceTurn += OnNetworkRequestAdvanceTurn;
+            _photon.OnChatMessage += OnNetworkChatMessage;
         }
 
         // Player index belirleme (rotasyondan ÖNCE gerekli)
@@ -195,6 +199,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
+
+        // Oyuncu köşe panellerini kur
+        SetupPlayerCornerPanels();
+
+        if (chatView != null)
+            chatView.Init(_localPlayerIndex, OnChatSend);
 
         pawnSpawner.enabled = true;
 
@@ -405,6 +415,38 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     }
 
     // ✅ UpdateTurnUI artık sadece local operasyonlarda kullanılacak
+    private void SetupPlayerCornerPanels()
+    {
+        string[] cornerNames = new string[4];
+
+        if (PhotonNetwork.InRoom)
+        {
+            // Önce hepsini renk adıyla doldur (boş kalmasın)
+            for (int i = 0; i < 4; i++)
+                cornerNames[i] = _turnNames[i];
+
+            // Photon'daki gerçek NickName varsa üzerine yaz
+            foreach (var kv in PhotonNetwork.CurrentRoom.Players)
+            {
+                int idx = kv.Value.ActorNumber - 1;
+                if (idx >= 0 && idx < 4)
+                {
+                    string nick = kv.Value.NickName;
+                    if (!string.IsNullOrEmpty(nick))
+                        cornerNames[idx] = nick;
+                }
+            }
+        }
+        else
+        {
+            // Offline mod: renk adları
+            for (int i = 0; i < 4; i++)
+                cornerNames[i] = _turnNames[i];
+        }
+
+        hudView.SetupPlayerCorners(cornerNames, _localPlayerIndex, PlayerCount);
+    }
+
     private void UpdateTurnUI()
     {
         hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
@@ -422,6 +464,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _photon.OnMove -= OnNetworkMove;
             _photon.OnTurn -= OnNetworkTurn;
             _photon.OnMoveRequest -= OnNetworkMoveRequest;
+            _photon.OnChatMessage -= OnNetworkChatMessage;
         }
 
         if (btnRollDice != null)
@@ -2451,5 +2494,15 @@ private void OnBoardAreaClicked(Vector2 screenPos)
         return GetHomePawnPosition(pawn);
     }
 
+    // ========== CHAT ==========
 
+    private void OnChatSend(string message)
+    {
+        _photon.BroadcastChatMessage(message, _localPlayerIndex);
+    }
+
+    private void OnNetworkChatMessage(string message, int senderPlayerIndex)
+    {
+        chatView?.AddMessage(message, senderPlayerIndex);
+    }
 }

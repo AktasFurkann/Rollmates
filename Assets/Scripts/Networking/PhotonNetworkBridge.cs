@@ -284,5 +284,21 @@ namespace LudoFriends.Networking
 
             PhotonNetwork.CurrentRoom.SetCustomProperties(props);
         }
+
+        // ========== CHAT ==========
+
+        public event Action<string, int> OnChatMessage;
+
+        public void BroadcastChatMessage(string message, int senderPlayerIndex)
+        {
+            photonView.RPC(nameof(RPC_ChatMessage), RpcTarget.All, message, senderPlayerIndex);
+        }
+
+        [PunRPC]
+        private void RPC_ChatMessage(string message, int senderPlayerIndex)
+        {
+            Debug.Log($"[RPC_ChatMessage] P{senderPlayerIndex}: {message}");
+            OnChatMessage?.Invoke(message, senderPlayerIndex);
+        }
     }
 }
