@@ -192,6 +192,20 @@ namespace LudoFriends.Presentation
             }
         }
 
+        /// <summary>
+        /// Verilen oyuncunun köşe panelini döndürür.
+        /// QuickChatView'den gelen emoji mesajlarını doğru panele yönlendirmek için kullanılır.
+        /// </summary>
+        public PlayerCornerPanel GetCornerPanelForPlayer(int playerIndex, int localPlayerIndex)
+        {
+            float diff = (GetPlayerAngle(playerIndex) - GetPlayerAngle(localPlayerIndex) + 360f) % 360f;
+            if (Mathf.Approximately(diff,   0f)) return panelCornerBottom;
+            if (Mathf.Approximately(diff,  90f)) return panelCornerLeft;
+            if (Mathf.Approximately(diff, 180f)) return panelCornerTop;
+            if (Mathf.Approximately(diff, 270f)) return panelCornerRight;
+            return null;
+        }
+
         private float GetPlayerAngle(int playerIndex)
         {
             // 0: Red (0)

@@ -99,6 +99,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     [Header("Chat")]
     [SerializeField] private ChatView chatView;
+    [SerializeField] private QuickChatView quickChatView;
 
     [Header("Board Rotation")]
     [SerializeField] private BoardRotator boardRotator;
@@ -205,6 +206,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (chatView != null)
             chatView.Init(_localPlayerIndex, OnChatSend);
+
+        if (quickChatView != null)
+            quickChatView.Init(_localPlayerIndex, OnChatSend, OnLocalEmojiSend);
 
         pawnSpawner.enabled = true;
 
@@ -2496,13 +2500,49 @@ private void OnBoardAreaClicked(Vector2 screenPos)
 
     // ========== CHAT ==========
 
+    // Lokal emoji: QuickChatView'dan index gelir, hemen animasyon oynat (ağa gitmeden önce)
+    private void OnLocalEmojiSend(int index)
+    {
+        var frames = quickChatView != null ? quickChatView.GetFrames(index) : null;
+        var localPanel = hudView.GetCornerPanelForPlayer(_localPlayerIndex, _localPlayerIndex);
+        if (localPanel != null && frames != null && frames.Length > 0)
+            localPanel.ShowAnimatedEmoji(frames);
+    }
+
     private void OnChatSend(string message)
     {
+        // Emoji ise lokal animasyon OnLocalEmojiSend'den zaten tetiklendi,
+        // burada sadece ağa gönderim yapılır.
+        // Metin ise lokal panelde float göster.
+        if (!message.StartsWith("__EMOJI__"))
+        {
+            var localPanel = hudView.GetCornerPanelForPlayer(_localPlayerIndex, _localPlayerIndex);
+            if (localPanel != null) localPanel.ShowEmojiFloat(message);
+        }
         _photon.BroadcastChatMessage(message, _localPlayerIndex);
     }
 
     private void OnNetworkChatMessage(string message, int senderPlayerIndex)
     {
-        chatView?.AddMessage(message, senderPlayerIndex);
+        var senderPanel = hudView.GetCornerPanelForPlayer(senderPlayerIndex, _localPlayerIndex);
+        if (message.StartsWith("__EMOJI__"))
+        {
+            // Index'i çöz, animasyonu oynat
+            string indexStr = message["__EMOJI__".Length..];
+            if (int.TryParse(indexStr, out int index))
+            {
+                var frames = quickChatView != null ? quickChatView.GetFrames(index) : null;
+                if (senderPanel != null)
+                {
+                    if (frames != null && frames.Length > 0)
+                        senderPanel.ShowAnimatedEmoji(frames);
+                }
+            }
+        }
+        else
+        {
+            if (senderPanel != null) senderPanel.ShowEmojiFloat(message);
+            if (chatView != null) chatView.AddMessage(message, senderPlayerIndex);
+        }
     }
 }
