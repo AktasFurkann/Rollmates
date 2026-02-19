@@ -116,6 +116,9 @@ namespace LudoFriends.Presentation
             if (emojiPopup == null) return;
             StopAllCoroutines();
 
+            // Önce parent'ı aktive et — child component'lerin activeInHierarchy=true olması gerekiyor
+            emojiPopup.SetActive(true);
+
             // Metin moduna geç
             if (txtEmoji != null)  { txtEmoji.gameObject.SetActive(true);  txtEmoji.text = text; }
             if (emojiImage != null) emojiImage.gameObject.SetActive(false);
@@ -132,6 +135,10 @@ namespace LudoFriends.Presentation
         {
             if (emojiPopup == null || frames == null || frames.Length == 0) return;
             StopAllCoroutines();
+
+            // Önce parent'ı aktive et — EmojiAnimator.StartCoroutine ancak
+            // activeInHierarchy=true iken çalışır; parent inactive iken sessizce başarısız olur
+            emojiPopup.SetActive(true);
 
             // Animasyon moduna geç
             if (txtEmoji != null)   txtEmoji.gameObject.SetActive(false);

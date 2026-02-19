@@ -26,7 +26,11 @@ namespace LudoFriends.Presentation
             if (_coroutine != null) StopCoroutine(_coroutine);
             if (frames == null || frames.Length == 0) return;
 
-            if (targetImage != null) targetImage.enabled = true;
+            if (targetImage != null)
+            {
+                targetImage.sprite = frames[0]; // İlk frame'i hemen göster – beyaz flash önleme
+                targetImage.enabled = true;
+            }
             _coroutine = StartCoroutine(Animate(frames, loop));
         }
 
