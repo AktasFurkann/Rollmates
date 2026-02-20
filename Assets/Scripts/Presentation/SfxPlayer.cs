@@ -14,6 +14,7 @@ public class SfxPlayer : MonoBehaviour
     [SerializeField] private AudioClip homeExitClip;     // ✅ Evden çıkış sesi (6 ile)
     [SerializeField] private AudioClip gameStartClip;    // ✅ Oyun başlama sesi
     [SerializeField] private AudioClip chatNotificationClip; // Mesaj bildirim sesi
+    [SerializeField] private AudioClip emojiSendClip;        // Emoji/quick-chat gönderme sesi
 
     [Header("Settings")]
     [SerializeField] private AudioSource audioSource;
@@ -148,6 +149,17 @@ public void StopClock()
 public void PlayChatNotification()
 {
     PlayOneShot(chatNotificationClip);
+}
+
+public void PlayEmojiSend()
+{
+    PlayOneShot(emojiSendClip);
+}
+
+// Dışarıdan verilen herhangi bir clip'i çalar (emoji başına farklı ses için)
+public void PlayClip(AudioClip clip)
+{
+    PlayOneShot(clip);
 }
 
 }

@@ -24,6 +24,9 @@ namespace LudoFriends.Presentation
         [Header("Emoji Entries (sıra önemli – network index bu listeye göre)")]
         [SerializeField] private EmojiEntry[] emojiEntries;
 
+        [Header("Audio")]
+        [SerializeField] private SfxPlayer sfx;
+
         private Action<string> _onSend;
         private Action<int> _onEmojiSend; // index tabanlı lokal callback
         private bool _isOpen;
@@ -37,6 +40,8 @@ namespace LudoFriends.Presentation
             public Button button;
             [Tooltip("Animasyon frame'leri – sırayla oynatılır (ör: 8-12 sprite)")]
             public Sprite[] frames;
+            [Tooltip("Bu emojiye özel ses – boş bırakılırsa ses çalmaz")]
+            public AudioClip audioClip;
         }
 
         // -----------------------------------------------
@@ -103,6 +108,12 @@ namespace LudoFriends.Presentation
             return emojiEntries[index].frames;
         }
 
+        public AudioClip GetAudioClip(int index)
+        {
+            if (index < 0 || index >= emojiEntries.Length) return null;
+            return emojiEntries[index].audioClip;
+        }
+
         // -----------------------------------------------
 
         private void Toggle() { if (_isOpen) Close(); else Open(); }
@@ -124,12 +135,18 @@ namespace LudoFriends.Presentation
         private void SendMessage(string text)
         {
             if (string.IsNullOrEmpty(text)) return;
+            if (sfx != null) sfx.PlayEmojiSend();
             _onSend?.Invoke(text);
             Close();
         }
 
         private void SendEmoji(int index)
         {
+            if (sfx != null && index >= 0 && index < emojiEntries.Length)
+            {
+                var clip = emojiEntries[index].audioClip;
+                if (clip != null) sfx.PlayClip(clip);
+            }
             // Lokal: hemen animasyonu tetikle
             _onEmojiSend?.Invoke(index);
             // Network: index string olarak gönder

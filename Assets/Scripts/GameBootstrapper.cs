@@ -2532,6 +2532,11 @@ private void OnBoardAreaClicked(Vector2 screenPos)
             if (int.TryParse(indexStr, out int index))
             {
                 var frames = quickChatView != null ? quickChatView.GetFrames(index) : null;
+                if (sfx != null && quickChatView != null)
+                {
+                    var clip = quickChatView.GetAudioClip(index);
+                    if (clip != null) sfx.PlayClip(clip);
+                }
                 if (senderPanel != null)
                 {
                     if (frames != null && frames.Length > 0)
