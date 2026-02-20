@@ -16,7 +16,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [SerializeField] private Button btnCreate;
     [SerializeField] private Button btnJoin;
     [SerializeField] private Button btnBack;
-    [SerializeField] private Button btnCopyCode;
+    [SerializeField] private Button btnShare;
     [SerializeField] private Button btnStartGame; // ✅ Enhancement 1: Host manual start
     [SerializeField] private TMP_InputField inputRoomCode;
 
@@ -74,7 +74,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         btnCreate?.onClick.AddListener(OnCreateClicked);
         btnJoin?.onClick.AddListener(OnJoinClicked);
         btnBack?.onClick.AddListener(OnBackClicked);
-        btnCopyCode?.onClick.AddListener(OnCopyCodeClicked);
+        btnShare?.onClick.AddListener(OnShareClicked);
 
         btnPublic?.onClick.AddListener(OnPublicClicked);
 btnPrivate?.onClick.AddListener(OnPrivateClicked);
@@ -99,6 +99,8 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
             txtStatus.text = "Sunucuya bağlanılıyor...";
             PhotonNetwork.ConnectUsingSettings();
         }
+
+        DeepLinkManager.OnPendingCodeChanged += OnDeepLinkReceived;
     }
 
     private void OnDestroy()
@@ -106,7 +108,8 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
         btnCreate?.onClick.RemoveListener(OnCreateClicked);
         btnJoin?.onClick.RemoveListener(OnJoinClicked);
         btnBack?.onClick.RemoveListener(OnBackClicked);
-        btnCopyCode?.onClick.RemoveListener(OnCopyCodeClicked);
+        btnShare?.onClick.RemoveListener(OnShareClicked);
+        DeepLinkManager.OnPendingCodeChanged -= OnDeepLinkReceived;
         btnPublic?.onClick.RemoveListener(OnPublicClicked);
 btnPrivate?.onClick.RemoveListener(OnPrivateClicked);
 btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
@@ -132,6 +135,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
         if (btnCreate != null) btnCreate.interactable = true;
         if (btnJoin != null) btnJoin.interactable = true;
+
+        CheckAndConsumeDeepLink();
     }
 
     public override void OnCreatedRoom()
@@ -295,16 +300,42 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         SceneManager.LoadScene("MainMenu");
     }
 
-    private void OnCopyCodeClicked()
+    private void OnShareClicked()
     {
         PlayClick();
 
-        if (!string.IsNullOrEmpty(_currentRoomCode))
-        {
-            GUIUtility.systemCopyBuffer = _currentRoomCode;
-            txtStatus.text = "Oda kodu kopyalandı!";
-            StartCoroutine(ResetStatusAfterDelay(2f));
-        }
+        if (string.IsNullOrEmpty(_currentRoomCode)) return;
+
+        string shareUrl = $"https://AktasFurkann.github.io/rollmateslink/?code={_currentRoomCode}";
+        string message = $"Rollmates'te benimle oyna! Odama katıl: {shareUrl}";
+        string encoded = UnityEngine.Networking.UnityWebRequest.EscapeURL(message);
+
+#if UNITY_EDITOR
+        GUIUtility.systemCopyBuffer = shareUrl;
+        txtStatus.text = "Davet linki kopyalandı!";
+        StartCoroutine(ResetStatusAfterDelay(2f));
+#else
+        Application.OpenURL($"whatsapp://send?text={encoded}");
+#endif
+    }
+
+    private void CheckAndConsumeDeepLink()
+    {
+        if (DeepLinkManager.Instance == null) return;
+
+        string code = DeepLinkManager.Instance.PendingRoomCode;
+        if (string.IsNullOrEmpty(code)) return;
+
+        DeepLinkManager.Instance.ConsumePendingCode();
+        if (panelButtons != null) panelButtons.SetActive(false);
+        txtStatus.text = $"Davet ile katılınıyor: {code}";
+        JoinRoomByCode(code);
+    }
+
+    private void OnDeepLinkReceived(string code)
+    {
+        if (!PhotonNetwork.InLobby) return;
+        CheckAndConsumeDeepLink();
     }
 
     // ==================== GAME LOGIC ====================

@@ -26,6 +26,11 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [SerializeField] private Button btnScoreboardClose;   // X butonu
     [SerializeField] private Button btnMainMenu;          // Ana Menü butonu
 
+    [Header("Disconnect UI")]
+    [SerializeField] private GameObject panelDisconnect;
+    [SerializeField] private TMPro.TextMeshProUGUI txtDisconnectMessage;
+    [SerializeField] private Button btnDisconnectMainMenu;
+
     [Header("Home Click Areas")]
 [SerializeField] private HomeAreaClick homeClickRed;
 [SerializeField] private HomeAreaClick homeClickGreen;
@@ -236,6 +241,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (winnerPanel != null)
             winnerPanel.SetActive(false);
+
+        if (panelDisconnect != null)
+            panelDisconnect.SetActive(false);
+
+        if (btnDisconnectMainMenu != null)
+            btnDisconnectMainMenu.onClick.AddListener(OnMainMenuClicked);
 
         InitScoreboard();
 
@@ -485,6 +496,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (btnMainMenu != null)
             btnMainMenu.onClick.RemoveListener(OnMainMenuClicked);
+
+        if (btnDisconnectMainMenu != null)
+            btnDisconnectMainMenu.onClick.RemoveListener(OnMainMenuClicked);
     }
 
     // ✅ Bug 1 fix: Reconnection support - sync state when player joins/rejoins
@@ -633,6 +647,29 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 SerializeAndSavePawnStates();
             }
         }
+    }
+
+    public override void OnDisconnected(Photon.Realtime.DisconnectCause cause)
+    {
+        Debug.LogWarning($"[GameBootstrapper] Disconnected: {cause}");
+
+        _timerActive = false;
+        _gameOver = true;
+
+        if (panelDisconnect != null)
+        {
+            panelDisconnect.SetActive(true);
+            if (txtDisconnectMessage != null)
+                txtDisconnectMessage.text = "Bağlantı kesildi!";
+        }
+    }
+
+    private void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus)
+            Debug.Log("[GameBootstrapper] App paused (background)");
+        else
+            Debug.Log("[GameBootstrapper] App resumed (foreground)");
     }
 
     /// <summary>
