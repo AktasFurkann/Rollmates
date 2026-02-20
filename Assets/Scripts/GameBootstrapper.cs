@@ -29,7 +29,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [Header("Disconnect UI")]
     [SerializeField] private GameObject panelDisconnect;
     [SerializeField] private TMPro.TextMeshProUGUI txtDisconnectMessage;
+    [SerializeField] private TMPro.TextMeshProUGUI txtDisconnectCountdown;
     [SerializeField] private Button btnDisconnectMainMenu;
+    [SerializeField] private Button btnReconnect;
+
+    [Header("Bot Mode UI")]
+    [SerializeField] private Button btnTakeControl;
+
+    private Coroutine _reconnectCoroutine;
 
     [Header("Home Click Areas")]
 [SerializeField] private HomeAreaClick homeClickRed;
@@ -90,8 +97,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private readonly Dictionary<PawnView, int> _pawnOwner = new Dictionary<PawnView, int>();
     private bool _gameOver = false;
+    private bool _isLeavingToMainMenu = false;
+    private bool _localBotMode = false;
     private readonly List<int> _finishOrder = new List<int>();
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
+    private readonly HashSet<int> _botPlayers = new HashSet<int>();
+    private const float BotAutoDelay = 1.5f;
 
     [Header("Pawn Sprites")]
     [SerializeField] private Sprite redPawnSprite;
@@ -247,6 +258,18 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (btnDisconnectMainMenu != null)
             btnDisconnectMainMenu.onClick.AddListener(OnMainMenuClicked);
+
+        if (btnReconnect != null)
+        {
+            btnReconnect.onClick.AddListener(OnReconnectClicked);
+            btnReconnect.gameObject.SetActive(false);
+        }
+
+        if (btnTakeControl != null)
+        {
+            btnTakeControl.onClick.AddListener(OnTakeControlClicked);
+            btnTakeControl.gameObject.SetActive(false);
+        }
 
         InitScoreboard();
 
@@ -499,12 +522,28 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (btnDisconnectMainMenu != null)
             btnDisconnectMainMenu.onClick.RemoveListener(OnMainMenuClicked);
+
+        if (btnReconnect != null)
+            btnReconnect.onClick.RemoveListener(OnReconnectClicked);
+
+        if (btnTakeControl != null)
+            btnTakeControl.onClick.RemoveListener(OnTakeControlClicked);
     }
 
     // ✅ Bug 1 fix: Reconnection support - sync state when player joins/rejoins
     public override void OnJoinedRoom()
     {
         base.OnJoinedRoom();
+
+        // Reconnect sonrası: disconnect panelini kapat ve oyunu devam ettir
+        if (_reconnectCoroutine != null)
+        {
+            StopCoroutine(_reconnectCoroutine);
+            _reconnectCoroutine = null;
+        }
+        if (panelDisconnect != null) panelDisconnect.SetActive(false);
+        if (btnReconnect != null) btnReconnect.gameObject.SetActive(false);
+        _gameOver = false;
 
         // Only restore state for non-host players (host already has correct state)
         if (PhotonNetwork.IsMasterClient) return;
@@ -599,6 +638,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         // Stuck state'leri temizle
         _isAnimating = false;
         _isRollingDice = false;
+        _botPlayers.Clear(); // Host migration sonrası bot listesini sıfırla
 
         // Yeni host ise, host sorumluluklarını devral
         if (newMasterClient.IsLocal)
@@ -661,7 +701,41 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             panelDisconnect.SetActive(true);
             if (txtDisconnectMessage != null)
                 txtDisconnectMessage.text = "Bağlantı kesildi!";
+            if (btnReconnect != null)
+                btnReconnect.gameObject.SetActive(true);
         }
+
+        _reconnectCoroutine = StartCoroutine(ReconnectCountdown());
+    }
+
+    private IEnumerator ReconnectCountdown()
+    {
+        float timeLeft = 60f;
+        var wait = new WaitForSeconds(1f);
+        PhotonNetwork.ReconnectAndRejoin();
+
+        while (timeLeft > 0)
+        {
+            if (txtDisconnectCountdown != null)
+                txtDisconnectCountdown.text = $"Yeniden bağlanılıyor... ({Mathf.CeilToInt(timeLeft)}s)";
+
+            yield return wait;
+            timeLeft -= 1f;
+        }
+
+        if (txtDisconnectCountdown != null)
+            txtDisconnectCountdown.text = "Bağlantı kurulamadı.";
+        if (btnReconnect != null)
+            btnReconnect.gameObject.SetActive(false);
+    }
+
+    private void OnReconnectClicked()
+    {
+        if (txtDisconnectCountdown != null)
+            txtDisconnectCountdown.text = "Bağlanılıyor...";
+        if (btnReconnect != null)
+            btnReconnect.interactable = false;
+        PhotonNetwork.ReconnectAndRejoin();
     }
 
     private void OnApplicationPause(bool pauseStatus)
@@ -670,6 +744,24 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             Debug.Log("[GameBootstrapper] App paused (background)");
         else
             Debug.Log("[GameBootstrapper] App resumed (foreground)");
+    }
+
+    public override void OnJoinRoomFailed(short returnCode, string message)
+    {
+        base.OnJoinRoomFailed(returnCode, message);
+        Debug.LogWarning($"[GameBootstrapper] OnJoinRoomFailed: {returnCode} - {message}");
+
+        // Reconnect bağlamında başarısız: butonu tekrar aktif et
+        if (panelDisconnect != null && panelDisconnect.activeSelf)
+        {
+            if (txtDisconnectCountdown != null)
+                txtDisconnectCountdown.text = "Yeniden bağlanılamadı. Tekrar dene.";
+            if (btnReconnect != null)
+            {
+                btnReconnect.gameObject.SetActive(true);
+                btnReconnect.interactable = true;
+            }
+        }
     }
 
     /// <summary>
@@ -747,6 +839,13 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         base.OnPlayerLeftRoom(otherPlayer);
 
+        // PlayerTtl > 0 ise geçici disconnect: oyuncu geri dönebilir, işlem yapma
+        if (otherPlayer.IsInactive)
+        {
+            Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} is inactive (temporary disconnect). Waiting for reconnect.");
+            return;
+        }
+
         if (_gameOver) return;
 
         int leftPlayerIndex = otherPlayer.ActorNumber - 1;
@@ -759,6 +858,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             Debug.Log($"[OnPlayerLeftRoom] P{leftPlayerIndex} added to finish order as #{_finishOrder.Count}");
         }
         _disconnectedPlayers.Add(leftPlayerIndex);
+        _botPlayers.Remove(leftPlayerIndex);
 
         // Çıkan oyuncunun piyonlarını tahtadan kaldır
         RemoveDisconnectedPlayerPawns(leftPlayerIndex);
@@ -913,6 +1013,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private IEnumerator CoRollDiceAnimated()
     {
+        // Timer hâlâ aktifse ve bu local oyuncu ise: manuel zar attı → bot modundan çıkar
+        if (_timerActive && PhotonNetwork.IsMasterClient
+            && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
+        {
+            _botPlayers.Remove(_state.CurrentTurnPlayerIndex);
+            Debug.Log($"[BotMode] P{_state.CurrentTurnPlayerIndex} woke up (manual roll)");
+        }
+
         _isRollingDice = true;
 
         if (btnRollDice != null)
@@ -1864,12 +1972,73 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     private void OnMainMenuClicked()
     {
         if (PhotonNetwork.InRoom)
+        {
+            _isLeavingToMainMenu = true;
             PhotonNetwork.LeaveRoom();
+            return; // OnLeftRoom callback'ini bekle
+        }
 
         if (PhotonNetwork.IsConnected)
             PhotonNetwork.Disconnect();
 
         SceneManager.LoadScene(0);
+    }
+
+    public override void OnLeftRoom()
+    {
+        base.OnLeftRoom();
+        if (_isLeavingToMainMenu)
+        {
+            _isLeavingToMainMenu = false;
+            if (PhotonNetwork.IsConnected)
+                PhotonNetwork.Disconnect();
+            SceneManager.LoadScene(0);
+        }
+    }
+
+    // ==================== BOT MODE ====================
+
+    private void SetLocalBotMode(bool active)
+    {
+        _localBotMode = active;
+        if (btnTakeControl != null)
+            btnTakeControl.gameObject.SetActive(active);
+    }
+
+    private void OnTakeControlClicked()
+    {
+        SetLocalBotMode(false);
+
+        if (PhotonNetwork.IsMasterClient)
+        {
+            // Host kendi bot modundan çıkıyor
+            _botPlayers.Remove(_localPlayerIndex);
+        }
+        else if (PhotonNetwork.InRoom)
+        {
+            // Client → host'a bildir (room property üzerinden)
+            var props = new ExitGames.Client.Photon.Hashtable();
+            props[$"exitbot_{_localPlayerIndex}"] = PhotonNetwork.ServerTimestamp;
+            PhotonNetwork.CurrentRoom.SetCustomProperties(props);
+        }
+
+        Debug.Log($"[BotMode] P{_localPlayerIndex} took manual control via button.");
+    }
+
+    public override void OnRoomPropertiesUpdate(ExitGames.Client.Photon.Hashtable propertiesThatChanged)
+    {
+        base.OnRoomPropertiesUpdate(propertiesThatChanged);
+        if (!PhotonNetwork.IsMasterClient) return;
+
+        for (int i = 0; i < 4; i++)
+        {
+            string key = $"exitbot_{i}";
+            if (propertiesThatChanged.ContainsKey(key))
+            {
+                _botPlayers.Remove(i);
+                Debug.Log($"[BotMode] P{i} exited bot mode via button (room property).");
+            }
+        }
     }
 
     private void DisableAllPawnClicks()
@@ -2238,6 +2407,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     // ✅ Timer yardımcı metotları
     private void StartTurnTimer(float duration)
     {
+        // Bot oyuncu için kısa auto-play süresi
+        if (PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient
+            && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
+        {
+            duration = BotAutoDelay;
+        }
+
         _turnTimer = duration;
         _timerActive = true;
         _clockPlayed = false; // ✅ Her yeni timer başlatıldığında sıfırla
@@ -2281,8 +2457,15 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         Debug.Log($"[Timer] Expired! Phase={_phase}, Turn=P{_state.CurrentTurnPlayerIndex}");
 
+        // Tüm clientlarda: kendi sıramsa lokal bot moduna gir
+        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex)
+            SetLocalBotMode(true);
+
         // Online: sadece host timeout kararını alır
         if (PhotonNetwork.InRoom && !PhotonNetwork.IsMasterClient) return;
+
+        // Bot moduna al
+        _botPlayers.Add(_state.CurrentTurnPlayerIndex);
 
         if (_phase == TurnPhase.AwaitRoll)
         {

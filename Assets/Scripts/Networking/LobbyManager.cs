@@ -351,7 +351,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     {
         MaxPlayers = maxPlayers,
         IsVisible = !isPrivate,  // ✅ Public: görünür, Private: gizli
-        IsOpen = true
+        IsOpen = true,
+        PlayerTtl = 60000  // 60 saniye yeniden bağlanma penceresi
     };
 
     PhotonNetwork.CreateRoom(roomCode, opts, TypedLobby.Default);
