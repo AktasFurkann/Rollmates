@@ -93,6 +93,13 @@ public void Resume()
     {
         Time.timeScale = 1f;
 
+        if (game != null)
+        {
+            game.ExitToMainMenu();
+            return;
+        }
+
+        // Fallback: GameBootstrapper yoksa direkt çık
         if (PhotonNetwork.InRoom)
             PhotonNetwork.LeaveRoom();
 

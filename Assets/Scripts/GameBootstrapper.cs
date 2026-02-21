@@ -98,6 +98,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private readonly Dictionary<PawnView, int> _pawnOwner = new Dictionary<PawnView, int>();
     private bool _gameOver = false;
     private bool _isLeavingToMainMenu = false;
+    private bool _isIntentionalDisconnect = false;
     private bool _localBotMode = false;
     private readonly List<int> _finishOrder = new List<int>();
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
@@ -692,6 +693,13 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     public override void OnDisconnected(Photon.Realtime.DisconnectCause cause)
     {
         Debug.LogWarning($"[GameBootstrapper] Disconnected: {cause}");
+
+        // Kasıtlı çıkış (Exit butonu) → reconnect başlatma
+        if (_isIntentionalDisconnect)
+        {
+            _isIntentionalDisconnect = false;
+            return;
+        }
 
         _timerActive = false;
         _gameOver = true;
@@ -1865,7 +1873,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (_photon != null && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient)
             _photon.SaveFinishOrder(_finishOrder.ToArray());
 
-        int activePlayers = PlayerCount;
+        int activePlayers = _initialPlayerCount;
 
         // Son kalan oyuncuyu otomatik ekle
         if (_finishOrder.Count >= activePlayers - 1)
@@ -1956,9 +1964,12 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (btnScoreboardClose != null)
             btnScoreboardClose.gameObject.SetActive(!_gameOver);
 
-        // Ana Menü butonu: sadece oyun bittiğinde göster
+        // Ana Menü butonu: sadece oyun bittiyse VE yerel oyuncu da bitirmişse göster
         if (btnMainMenu != null)
-            btnMainMenu.gameObject.SetActive(_gameOver);
+        {
+            bool localPlayerFinished = _finishOrder.Contains(_localPlayerIndex);
+            btnMainMenu.gameObject.SetActive(_gameOver && localPlayerFinished);
+        }
 
         scoreboardPanel.SetActive(true);
     }
@@ -1969,18 +1980,18 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             scoreboardPanel.SetActive(false);
     }
 
-    private void OnMainMenuClicked()
+    private void OnMainMenuClicked() => ExitToMainMenu();
+
+    public void ExitToMainMenu()
     {
         if (PhotonNetwork.InRoom)
         {
             _isLeavingToMainMenu = true;
-            PhotonNetwork.LeaveRoom();
+            PhotonNetwork.LeaveRoom(false); // becomeInactive: false → hemen kalıcı çıkış, 60s bekleme yok
             return; // OnLeftRoom callback'ini bekle
         }
 
-        if (PhotonNetwork.IsConnected)
-            PhotonNetwork.Disconnect();
-
+        // Odada değilsek direkt sahne yükle — Disconnect yok
         SceneManager.LoadScene(0);
     }
 
@@ -1990,8 +2001,9 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (_isLeavingToMainMenu)
         {
             _isLeavingToMainMenu = false;
-            if (PhotonNetwork.IsConnected)
-                PhotonNetwork.Disconnect();
+            // Disconnect ÇAĞIRMA — Photon master server'a bağlı kalır.
+            // LobbyManager.Start() IsConnectedAndReady görür → JoinLobby çağırır.
+            // Disconnect() çağırınca OnDisconnected tetiklenip reconnect başlıyordu.
             SceneManager.LoadScene(0);
         }
     }
