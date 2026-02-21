@@ -308,13 +308,15 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
         string shareUrl = $"https://AktasFurkann.github.io/rollmateslink/?code={_currentRoomCode}";
         string message = $"Rollmates'te benimle oyna! Odama katıl: {shareUrl}";
-        string encoded = UnityEngine.Networking.UnityWebRequest.EscapeURL(message);
 
-#if UNITY_EDITOR
+        // Tüm platformlarda panoya kopyala
         GUIUtility.systemCopyBuffer = shareUrl;
         txtStatus.text = "Davet linki kopyalandı!";
         StartCoroutine(ResetStatusAfterDelay(2f));
-#else
+
+#if !UNITY_EDITOR
+        // Android'de WhatsApp'ı da açmayı dene
+        string encoded = UnityEngine.Networking.UnityWebRequest.EscapeURL(message);
         Application.OpenURL($"whatsapp://send?text={encoded}");
 #endif
     }
