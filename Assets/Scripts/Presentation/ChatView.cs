@@ -25,7 +25,6 @@ namespace LudoFriends.Presentation
         [Header("Audio")]
         [SerializeField] private SfxPlayer sfx;
 
-        private static readonly string[] PlayerNames = { "Kırmızı", "Sarı", "Yeşil", "Mavi" };
         private static readonly Color[] PlayerColors =
         {
             new Color(0.9f, 0.15f, 0.15f),
@@ -92,8 +91,8 @@ namespace LudoFriends.Presentation
             var txt = item.GetComponentInChildren<TextMeshProUGUI>();
             if (txt != null)
             {
-                string name = (senderPlayerIndex >= 0 && senderPlayerIndex < PlayerNames.Length)
-                    ? PlayerNames[senderPlayerIndex] : "?";
+                string name = (senderPlayerIndex >= 0 && senderPlayerIndex <= 3)
+                    ? LocalizationManager.GetColorName(senderPlayerIndex) : "?";
                 Color c = (senderPlayerIndex >= 0 && senderPlayerIndex < PlayerColors.Length)
                     ? PlayerColors[senderPlayerIndex] : Color.white;
                 txt.color = c;

@@ -18,6 +18,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [SerializeField] private Button btnBack;
     [SerializeField] private Button btnShare;
     [SerializeField] private Button btnStartGame; // ✅ Enhancement 1: Host manual start
+    [SerializeField] private Button btnSpectate;  // İzleyici modu toggle
     [SerializeField] private TMP_InputField inputRoomCode;
 
     [Header("Texts")]
@@ -49,6 +50,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 [SerializeField] private Button btnCancelChoice;
 
     private bool _gameStarted = false;
+    private bool _localIsSpectating = false;
     private Coroutine _countdownCoroutine;
     private string _currentRoomCode = "";
 
@@ -60,7 +62,46 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         new Color(0.2f, 0.4f, 0.9f)   // Mavi
     };
 
-    private readonly string[] _colorNames = { "Kırmızı", "Sarı", "Yeşil", "Mavi" };
+    private enum LobbyStatus
+    {
+        None, Connecting, Connected, Ready, RoomCreated, Searching,
+        RoomNotFound, RoomNotFoundFull, Disconnected, InviteCopied,
+        NotEnoughPlayers, WaitingForPlayers, LoadingGame, WaitingForHost
+    }
+    private LobbyStatus _currentStatus = LobbyStatus.None;
+
+    public override void OnEnable()
+    {
+        base.OnEnable();
+        LocalizationManager.OnLanguageChanged += RefreshLocalization;
+    }
+
+    public override void OnDisable()
+    {
+        base.OnDisable();
+        LocalizationManager.OnLanguageChanged -= RefreshLocalization;
+    }
+
+    private void RefreshLocalization()
+    {
+        switch (_currentStatus)
+        {
+            case LobbyStatus.Connecting:        if (txtStatus != null) txtStatus.text = LocalizationManager.Get("connecting"); break;
+            case LobbyStatus.Connected:         if (txtStatus != null) txtStatus.text = LocalizationManager.Get("connected"); break;
+            case LobbyStatus.Ready:             if (txtStatus != null) txtStatus.text = LocalizationManager.Get("ready"); break;
+            case LobbyStatus.RoomCreated:       if (txtStatus != null) txtStatus.text = LocalizationManager.Get("room_created"); break;
+            case LobbyStatus.Searching:         if (txtStatus != null) txtStatus.text = LocalizationManager.Get("searching"); break;
+            case LobbyStatus.RoomNotFound:      if (txtStatus != null) txtStatus.text = LocalizationManager.Get("room_not_found"); break;
+            case LobbyStatus.RoomNotFoundFull:  if (txtStatus != null) txtStatus.text = LocalizationManager.Get("room_not_found_full"); break;
+            case LobbyStatus.Disconnected:      if (txtStatus != null) txtStatus.text = LocalizationManager.Get("disconnected"); break;
+            case LobbyStatus.InviteCopied:      if (txtStatus != null) txtStatus.text = LocalizationManager.Get("invite_copied"); break;
+            case LobbyStatus.NotEnoughPlayers:  if (txtCountdown != null) txtCountdown.text = LocalizationManager.Get("not_enough_players"); break;
+            case LobbyStatus.WaitingForPlayers: if (txtStatus != null) txtStatus.text = LocalizationManager.Get("waiting_for_players"); break;
+            case LobbyStatus.LoadingGame:       if (txtStatus != null) txtStatus.text = LocalizationManager.Get("loading_game"); break;
+            case LobbyStatus.WaitingForHost:    if (txtCountdown != null) txtCountdown.text = LocalizationManager.Get("waiting_for_host"); break;
+        }
+        UpdatePlayerList();
+    }
 
     private void Start()
     {
@@ -80,6 +121,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 btnPrivate?.onClick.AddListener(OnPrivateClicked);
 btnCancelChoice?.onClick.AddListener(OnCancelChoiceClicked);
         btnStartGame?.onClick.AddListener(OnStartGameClicked); // ✅ Enhancement 1
+        btnSpectate?.onClick.AddListener(OnSpectateClicked);
 
 if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 
@@ -88,15 +130,18 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 
         if (txtCountdown != null) txtCountdown.text = "";
         if (btnStartGame != null) btnStartGame.gameObject.SetActive(false); // ✅ Enhancement 1: Hide initially
+        if (btnSpectate != null) btnSpectate.gameObject.SetActive(false);
 
         if (PhotonNetwork.IsConnectedAndReady)
         {
-            txtStatus.text = "Bağlandı!";
+            _currentStatus = LobbyStatus.Connected;
+            txtStatus.text = LocalizationManager.Get("connected");
             PhotonNetwork.JoinLobby();
         }
         else
         {
-            txtStatus.text = "Sunucuya bağlanılıyor...";
+            _currentStatus = LobbyStatus.Connecting;
+            txtStatus.text = LocalizationManager.Get("connecting");
             PhotonNetwork.ConnectUsingSettings();
         }
 
@@ -114,6 +159,7 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 btnPrivate?.onClick.RemoveListener(OnPrivateClicked);
 btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         btnStartGame?.onClick.RemoveListener(OnStartGameClicked); // ✅ Enhancement 1
+        btnSpectate?.onClick.RemoveListener(OnSpectateClicked);
 
         if (_countdownCoroutine != null)
             StopCoroutine(_countdownCoroutine);
@@ -123,13 +169,15 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
     public override void OnConnectedToMaster()
     {
-        txtStatus.text = "Bağlandı!";
+        _currentStatus = LobbyStatus.Connected;
+        txtStatus.text = LocalizationManager.Get("connected");
         PhotonNetwork.JoinLobby();
     }
 
     public override void OnJoinedLobby()
     {
-        txtStatus.text = "Hazır!";
+        _currentStatus = LobbyStatus.Ready;
+        txtStatus.text = LocalizationManager.Get("ready");
         if (panelButtons != null) panelButtons.SetActive(true);
         if (panelWaiting != null) panelWaiting.SetActive(false);
 
@@ -142,12 +190,23 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     public override void OnCreatedRoom()
     {
         _currentRoomCode = PhotonNetwork.CurrentRoom.Name;
-        txtStatus.text = "Oda oluşturuldu!";
+        _currentStatus = LobbyStatus.RoomCreated;
+        txtStatus.text = LocalizationManager.Get("room_created");
         SetRoomCodeUI(_currentRoomCode);
     }
 
     public override void OnJoinedRoom()
     {
+        // Oyun zaten başlamışsa → spectator olarak direkt game scene'e git
+        if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey("gs"))
+        {
+            SceneManager.LoadScene(gameSceneName);
+            return;
+        }
+
+        // Yeni odaya katıldık → spec flag'ini sıfırla (geç katılım tespiti için)
+        _localIsSpectating = false;
+
         // Buton panelini gizle, bekleme panelini göster
         if (panelButtons != null) panelButtons.SetActive(false);
         if (panelWaiting != null) panelWaiting.SetActive(true);
@@ -163,6 +222,10 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
             btnStartGame.interactable = PhotonNetwork.CurrentRoom.PlayerCount >= minPlayersToStart;
         }
 
+        // İzleyici butonu lobide gizli kalır — izleyici yalnızca oyun başladıktan sonra katılan geç gelenlerdir.
+        if (btnSpectate != null)
+            btnSpectate.gameObject.SetActive(false);
+
         // ✅ NEW (Fix 3): Show waiting message for clients
         if (txtCountdown != null)
         {
@@ -174,7 +237,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
             else
             {
                 // Clients see waiting message
-                txtCountdown.text = "Waiting for host...";
+                _currentStatus = LobbyStatus.WaitingForHost;
+                txtCountdown.text = LocalizationManager.Get("waiting_for_host");
             }
         }
 
@@ -188,7 +252,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
     public override void OnJoinRandomFailed(short returnCode, string message)
 {
-    txtStatus.text = "Oda bulunamadı!";
+    _currentStatus = LobbyStatus.RoomNotFound;
+    txtStatus.text = LocalizationManager.Get("room_not_found");
 
     if (btnCreate != null) btnCreate.interactable = true;
     if (btnJoin != null) btnJoin.interactable = true;
@@ -206,7 +271,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
     public override void OnJoinRoomFailed(short returnCode, string message)
 {
-    txtStatus.text = "Oda bulunamadı veya dolu!";
+    _currentStatus = LobbyStatus.RoomNotFoundFull;
+    txtStatus.text = LocalizationManager.Get("room_not_found_full");
 
     if (btnCreate != null) btnCreate.interactable = true;
     if (btnJoin != null) btnJoin.interactable = true;
@@ -221,7 +287,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
     public override void OnDisconnected(DisconnectCause cause)
     {
-        txtStatus.text = "Bağlantı kesildi!";
+        _currentStatus = LobbyStatus.Disconnected;
+        txtStatus.text = LocalizationManager.Get("disconnected");
         if (panelButtons != null) panelButtons.SetActive(false);
         if (panelWaiting != null) panelWaiting.SetActive(false);
     }
@@ -266,6 +333,26 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         StartGame();
     }
 
+    private void OnSpectateClicked()
+    {
+        PlayClick();
+        _localIsSpectating = !_localIsSpectating;
+        PhotonNetwork.LocalPlayer.SetCustomProperties(
+            new ExitGames.Client.Photon.Hashtable { { "spec", _localIsSpectating } });
+        UpdateSpectateButton();
+        Debug.Log($"[LobbyManager] Spectate toggled: {_localIsSpectating}");
+    }
+
+    private void UpdateSpectateButton()
+    {
+        if (btnSpectate == null) return;
+        var txt = btnSpectate.GetComponentInChildren<TMPro.TMP_Text>();
+        if (txt != null)
+            txt.text = _localIsSpectating
+                ? LocalizationManager.Get("become_player")
+                : LocalizationManager.Get("become_spectator");
+    }
+
     private void OnJoinClicked()
 {
     PlayClick();
@@ -275,7 +362,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     if (string.IsNullOrEmpty(code))
     {
         // ✅ Kod yoksa: public odaları ara
-        txtStatus.text = "Oyun aranıyor...";
+        _currentStatus = LobbyStatus.Searching;
+        txtStatus.text = LocalizationManager.Get("searching");
         if (btnCreate != null) btnCreate.interactable = false;
         if (btnJoin != null) btnJoin.interactable = false;
         PhotonNetwork.JoinRandomRoom();
@@ -311,7 +399,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
         // Tüm platformlarda panoya kopyala
         GUIUtility.systemCopyBuffer = shareUrl;
-        txtStatus.text = "Davet linki kopyalandı!";
+        _currentStatus = LobbyStatus.InviteCopied;
+        txtStatus.text = LocalizationManager.Get("invite_copied");
         StartCoroutine(ResetStatusAfterDelay(2f));
 
 #if !UNITY_EDITOR
@@ -362,7 +451,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
     private void JoinRoom()
     {
-        txtStatus.text = "Oyun aranıyor...";
+        _currentStatus = LobbyStatus.Searching;
+        txtStatus.text = LocalizationManager.Get("searching");
         if (btnCreate != null) btnCreate.interactable = false;
         if (btnJoin != null) btnJoin.interactable = false;
 
@@ -387,7 +477,7 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
             int playerCount = PhotonNetwork.CurrentRoom.PlayerCount;
 
             if (txtCountdown != null)
-                txtCountdown.text = $"Başlamaya {Mathf.CeilToInt(timeRemaining)} saniye...";
+                txtCountdown.text = string.Format(LocalizationManager.Get("starting_in"), Mathf.CeilToInt(timeRemaining));
 
             UpdatePlayerList();
 
@@ -404,7 +494,10 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         else
         {
             if (txtCountdown != null)
-                txtCountdown.text = "Yeterli oyuncu yok, bekleniyor...";
+            {
+                _currentStatus = LobbyStatus.NotEnoughPlayers;
+                txtCountdown.text = LocalizationManager.Get("not_enough_players");
+            }
 
             _gameStarted = false;
             _countdownCoroutine = StartCoroutine(CountdownAndStart());
@@ -415,9 +508,22 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     {
         if (PhotonNetwork.IsMasterClient && PhotonNetwork.InRoom)
         {
-            txtStatus.text = "Oyun yükleniyor...";
-            PhotonNetwork.CurrentRoom.IsOpen = false;
+            _currentStatus = LobbyStatus.LoadingGame;
+            txtStatus.text = LocalizationManager.Get("loading_game");
+
+            // Odayı spectator'lara aç (oyuncu sayısı * 2 slot)
+            PhotonNetwork.CurrentRoom.MaxPlayers = (byte)(maxPlayers * 2);
+            PhotonNetwork.CurrentRoom.IsOpen = true;
             PhotonNetwork.CurrentRoom.IsVisible = false;
+
+            // Spectator tespiti için room property'leri kaydet
+            var gameProps = new ExitGames.Client.Photon.Hashtable
+            {
+                { "gs", true },
+                { "ipc", (int)PhotonNetwork.CurrentRoom.PlayerCount }
+            };
+            PhotonNetwork.CurrentRoom.SetCustomProperties(gameProps);
+
             PhotonNetwork.LoadLevel(gameSceneName);
         }
     }
@@ -455,7 +561,7 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
                     playerName = $"Oyuncu {index + 1}";
 
                 string suffix = player.Value.IsMasterClient ? " (Host)" : "";
-                playerSlotNames[index].text = $"{_colorNames[index]}: {playerName}{suffix}";
+                playerSlotNames[index].text = $"{LocalizationManager.GetColorName(index)}: {playerName}{suffix}";
             }
 
             index++;
@@ -491,8 +597,8 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
         if (PhotonNetwork.InRoom)
         {
-            int playerCount = PhotonNetwork.CurrentRoom.PlayerCount;
-            txtStatus.text = $"Oyuncular bekleniyor...";
+            _currentStatus = LobbyStatus.WaitingForPlayers;
+            txtStatus.text = LocalizationManager.Get("waiting_for_players");
         }
     }
 

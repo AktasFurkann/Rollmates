@@ -19,6 +19,10 @@ namespace LudoFriends.Presentation
         [SerializeField] private Slider sliderSfx;
         [SerializeField] private Button btnCloseSettings;
 
+        [Header("Language")]
+        [SerializeField] private Button btnLanguageTR;
+        [SerializeField] private Button btnLanguageEN;
+
         [Header("Audio")]
         [SerializeField] private AudioSource musicSource;
         [SerializeField] private AudioClip clickSound;       // ✅ YENİ
@@ -35,6 +39,11 @@ namespace LudoFriends.Presentation
 
             if (btnCloseSettings != null)
                 btnCloseSettings.onClick.AddListener(OnCloseSettingsClicked);
+
+            if (btnLanguageTR != null)
+                btnLanguageTR.onClick.AddListener(OnLanguageTRClicked);
+            if (btnLanguageEN != null)
+                btnLanguageEN.onClick.AddListener(OnLanguageENClicked);
 
             // Kayıtlı ses ayarlarını yükle
             if (sliderMusic != null)
@@ -92,6 +101,24 @@ namespace LudoFriends.Presentation
             PlayerPrefs.SetFloat("SfxVolume", value);
             AudioListener.volume = value;
         }
+        private void OnLanguageTRClicked()
+        {
+            PlayClick();
+            LocalizationManager.Instance?.SetLanguageTR();
+        }
+
+        private void OnLanguageENClicked()
+        {
+            PlayClick();
+            LocalizationManager.Instance?.SetLanguageEN();
+        }
+
+        private void OnDestroy()
+        {
+            btnLanguageTR?.onClick.RemoveListener(OnLanguageTRClicked);
+            btnLanguageEN?.onClick.RemoveListener(OnLanguageENClicked);
+        }
+
         private void PlayClick()
         {
             if (sfxSource != null && clickSound != null)
