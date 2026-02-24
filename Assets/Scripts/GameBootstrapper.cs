@@ -36,6 +36,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [Header("Bot Mode UI")]
     [SerializeField] private Button btnTakeControl;
 
+    [Header("Room Info")]
+    [SerializeField] private TMPro.TextMeshProUGUI txtInGameRoomCode;
+
     private Coroutine _reconnectCoroutine;
 
     [Header("Home Click Areas")]
@@ -100,6 +103,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private bool _isLeavingToMainMenu = false;
     private bool _isIntentionalDisconnect = false;
     private bool _localBotMode = false;
+    private bool _isSpectator = false;
     private readonly List<int> _finishOrder = new List<int>();
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
@@ -128,7 +132,11 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private bool _timerActive = false;
     private bool _clockPlayed = false; // ✅ 3 saniye sesi tekrar çalmasın diye flag
 
-    private readonly string[] _turnNames = { "Kırmızı", "Sarı", "Yeşil", "Mavi" };
+    private string TurnName(int index) => LocalizationManager.GetColorName(index);
+
+    private enum DisconnectStatus { None, Disconnected, Reconnecting, CouldNotConnect, Connecting, ReconnectFailed }
+    private DisconnectStatus _disconnectStatus = DisconnectStatus.None;
+    private float _reconnectTimeLeft = 0f;
 
     private readonly Dictionary<int, PawnView> _idToPawn = new Dictionary<int, PawnView>();
     private readonly Dictionary<PawnView, int> _pawnToId = new Dictionary<PawnView, int>();
@@ -179,19 +187,60 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _photon.OnChatMessage += OnNetworkChatMessage;
         }
 
-        // Player index belirleme (rotasyondan ÖNCE gerekli)
+        // Player index + spectator tespiti + initialPlayerCount (hepsi birlikte)
+        // Spectator = oyun başladıktan sonra katılan geç gelen. Lobidekiler daima oyuncu.
+        // Photon session içinde ActorNumber yeniden kullanılmaz → ipc'yi aşan = spectator.
         if (PhotonNetwork.InRoom)
         {
-            _localPlayerIndex = PhotonNetwork.LocalPlayer.ActorNumber - 1;
+            int ipc = -1;
+            if (PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue("ipc", out object ipcObj) && ipcObj != null)
+            {
+                try { ipc = System.Convert.ToInt32(ipcObj); }
+                catch { ipc = -1; }
+            }
 
-            if (_localPlayerIndex >= PlayerCount)
-                _localPlayerIndex = PlayerCount - 1;
+            Debug.Log($"[GameBootstrapper] ipc={ipc} (raw type={ipcObj?.GetType()}), ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}");
 
-            Debug.Log($"[GameBootstrapper] ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, PlayerIndex={_localPlayerIndex}, Color={_turnNames[_localPlayerIndex]}");
+            if (ipc > 0)
+            {
+                _initialPlayerCount = ipc;
+                if (PhotonNetwork.LocalPlayer.ActorNumber > ipc)
+                {
+                    _isSpectator = true;
+                    _localPlayerIndex = -1;
+                    Debug.Log("[GameBootstrapper] Spectator mode (ActorNumber > ipc)");
+                }
+                else
+                {
+                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
+                    Debug.Log($"[GameBootstrapper] PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
+                }
+            }
+            else
+            {
+                // ipc yok/geçersiz → "gs" (game started) varsa spectator say
+                bool gameStarted = PhotonNetwork.CurrentRoom.CustomProperties
+                    .TryGetValue("gs", out object gsObj) && gsObj != null
+                    && System.Convert.ToBoolean(gsObj);
+
+                if (gameStarted)
+                {
+                    _isSpectator = true;
+                    _localPlayerIndex = -1;
+                    Debug.Log("[GameBootstrapper] Spectator mode (gs=true, ipc missing/invalid)");
+                }
+                else
+                {
+                    _initialPlayerCount = PhotonNetwork.CurrentRoom.PlayerCount;
+                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
+                    Debug.Log($"[GameBootstrapper] ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
+                }
+            }
         }
         else
         {
             _localPlayerIndex = 0;
+            _initialPlayerCount = PlayerCount;
             Debug.Log("[GameBootstrapper] Offline mode");
         }
 
@@ -200,7 +249,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             boardRotator.ApplyRotation(_localPlayerIndex);
             Canvas.ForceUpdateCanvases();
-            Debug.Log($"[GameBootstrapper] Board rotated {_localPlayerIndex * 90f}° for player {_turnNames[_localPlayerIndex]}");
+            Debug.Log($"[GameBootstrapper] Board rotated {_localPlayerIndex * 90f}° for player {TurnName(_localPlayerIndex)}");
         }
 
         // Waypoint pozisyonlarını önbelleğe al (artık döndürülmüş pozisyonları okur)
@@ -213,9 +262,11 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             positionManager.CacheHomeLanePositions(3, boardWaypoints.HomeB);
         }
 
-        _initialPlayerCount = PlayerCount;
+        // Oda kodunu göster
+        if (txtInGameRoomCode != null && PhotonNetwork.InRoom)
+            txtInGameRoomCode.text = PhotonNetwork.CurrentRoom.Name;
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
         // Oyuncu köşe panellerini kur
@@ -290,9 +341,27 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (btnRollDice != null)
         {
-            bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-            btnRollDice.interactable = isMyTurn && !_gameOver;
-            Debug.Log($"[Awake] FirstTurn={_state.CurrentTurnPlayerIndex}, MyTurn={isMyTurn}, ButtonActive={btnRollDice.interactable}");
+            if (!PhotonNetwork.InRoom)
+            {
+                // Offline mod: hemen etkinleştir
+                bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+                btnRollDice.interactable = isMyTurn && !_gameOver;
+                Debug.Log($"[Awake] Offline. FirstTurn={_state.CurrentTurnPlayerIndex}, MyTurn={isMyTurn}");
+            }
+            else if (_isSpectator)
+            {
+                // Spectator kesinleşti → gizle
+                btnRollDice.interactable = false;
+                Debug.Log("[Awake] Spectator: dice button passive (visible but non-interactive).");
+            }
+            else
+            {
+                // Online oyuncu: sıramızsa aktif, değilse pasif.
+                // Geç gelen spectator'lar OnJoinedRoom'da butonu pasif eder.
+                bool isMyTurn = _state.CurrentTurnPlayerIndex == _localPlayerIndex;
+                btnRollDice.interactable = isMyTurn && !_gameOver;
+                Debug.Log($"[Awake] Online player: PlayerIndex={_localPlayerIndex}, MyTurn={isMyTurn}, BtnInteractable={isMyTurn && !_gameOver}");
+            }
         }
 
         HighlightActivePlayerPawns();
@@ -300,8 +369,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         // ✅ Oyun başlama sesi
         sfx?.PlayGameStart();
 
-        // ✅ İlk sıra için timer başlat (online + offline)
-        StartTurnTimer(rollTimeLimit);
+        // İlk sıra için timer başlat — spectator için başlatma
+        if (!_isSpectator)
+            StartTurnTimer(rollTimeLimit);
     }
 
     // ========== TIMER NETWORK EVENT SUBSCRIPTIONS (Fix 1) ==========
@@ -315,6 +385,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _photon.OnTimerStart += OnNetworkTimerStart;
             _photon.OnTimerStop += OnNetworkTimerStop;
         }
+
+        LocalizationManager.OnLanguageChanged += RefreshLocalization;
     }
 
     public override void OnDisable()
@@ -326,6 +398,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _photon.OnTimerStart -= OnNetworkTimerStart;
             _photon.OnTimerStop -= OnNetworkTimerStop;
         }
+
+        LocalizationManager.OnLanguageChanged -= RefreshLocalization;
     }
 
     // ✅ YENİ metod
@@ -355,20 +429,73 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _photon.OnMoveRequest += OnNetworkMoveRequest;
         }
 
-        // Player index belirleme
+        // Player index ve spectator — InitializeGame 0.5s sonra çalışır, property'ler artık kesinlikle sync olmuştur.
+        // Spectator = oyun başladıktan sonra katılan geç gelen. Lobidekiler daima oyuncu.
         if (PhotonNetwork.InRoom)
         {
-            _localPlayerIndex = PhotonNetwork.LocalPlayer.ActorNumber - 1;
+            int ipc2 = -1;
+            if (PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue("ipc", out object ipcObj2) && ipcObj2 != null)
+            {
+                try { ipc2 = System.Convert.ToInt32(ipcObj2); }
+                catch { ipc2 = -1; }
+            }
 
-            if (_localPlayerIndex >= PlayerCount)
-                _localPlayerIndex = PlayerCount - 1;
-
-            Debug.Log($"[GameBootstrapper] ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, PlayerIndex={_localPlayerIndex}, Color={_turnNames[_localPlayerIndex]}");
+            if (ipc2 > 0)
+            {
+                _initialPlayerCount = ipc2;
+                if (PhotonNetwork.LocalPlayer.ActorNumber > ipc2)
+                {
+                    _isSpectator = true;
+                    _localPlayerIndex = -1;
+                    Debug.Log($"[GameBootstrapper] InitializeGame: Spectator confirmed. ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, ipc={ipc2}");
+                }
+                else
+                {
+                    _isSpectator = false;
+                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
+                    Debug.Log($"[GameBootstrapper] InitializeGame: Player confirmed. PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
+                }
+            }
+            else
+            {
+                // ipc hâlâ bulunamadı — gs varsa spectator say
+                bool gameStarted2 = PhotonNetwork.CurrentRoom.CustomProperties
+                    .TryGetValue("gs", out object gsObj2) && gsObj2 != null
+                    && System.Convert.ToBoolean(gsObj2);
+                if (gameStarted2)
+                {
+                    _isSpectator = true;
+                    _localPlayerIndex = -1;
+                    Debug.Log("[GameBootstrapper] InitializeGame: Spectator (gs=true, ipc missing)");
+                }
+                else
+                {
+                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
+                    Debug.Log($"[GameBootstrapper] InitializeGame (no ipc/gs): PlayerIndex={_localPlayerIndex}");
+                }
+            }
         }
         else
         {
             _localPlayerIndex = 0;
-            Debug.Log("[GameBootstrapper] Offline mode");
+            Debug.Log("[GameBootstrapper] InitializeGame: Offline mode");
+        }
+
+        // Zar butonu: spectator tespit kesinleşti, butonu doğru state'e getir
+        if (btnRollDice != null)
+        {
+            if (_isSpectator)
+            {
+                btnRollDice.interactable = false;
+                Debug.Log("[InitializeGame] Spectator confirmed: dice button passive.");
+            }
+            else if (PhotonNetwork.InRoom)
+            {
+                // Online oyuncu — sıra kontrolüne göre enable et
+                bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+                btnRollDice.interactable = isMyTurn && !_gameOver;
+                Debug.Log($"[InitializeGame] Player confirmed. PlayerIndex={_localPlayerIndex}, MyTurn={isMyTurn}, BtnInteractable={btnRollDice.interactable}");
+            }
         }
 
         // Tahta rotasyonu (pozisyon cache'lemeden ÖNCE)
@@ -376,7 +503,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             boardRotator.ApplyRotation(_localPlayerIndex);
             Canvas.ForceUpdateCanvases();
-            Debug.Log($"[InitializeGame] Board rotated {_localPlayerIndex * 90f}° for player {_turnNames[_localPlayerIndex]}");
+            Debug.Log($"[InitializeGame] Board rotated {_localPlayerIndex * 90f}° for player {TurnName(_localPlayerIndex)}");
         }
 
         // Pozisyonları yeniden cache'le (döndürülmüş haliyle)
@@ -391,7 +518,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         _initialPlayerCount = PlayerCount;
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
         pawnSpawner.enabled = true;
@@ -453,6 +580,47 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         InitializeGame();
     }
 
+    private void RefreshLocalization()
+    {
+        // HUD turn label
+        if (hudView != null && _state != null)
+            hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+
+        // Scoreboard title
+        UpdateScoreboard();
+
+        // Disconnect panel
+        if (panelDisconnect != null && panelDisconnect.activeSelf)
+        {
+            switch (_disconnectStatus)
+            {
+                case DisconnectStatus.Disconnected:
+                    if (txtDisconnectMessage != null)
+                        txtDisconnectMessage.text = LocalizationManager.Get("disconnected");
+                    break;
+                case DisconnectStatus.Reconnecting:
+                    if (txtDisconnectCountdown != null)
+                        txtDisconnectCountdown.text = string.Format(LocalizationManager.Get("reconnecting"), Mathf.CeilToInt(_reconnectTimeLeft));
+                    break;
+                case DisconnectStatus.CouldNotConnect:
+                    if (txtDisconnectCountdown != null)
+                        txtDisconnectCountdown.text = LocalizationManager.Get("could_not_connect");
+                    break;
+                case DisconnectStatus.Connecting:
+                    if (txtDisconnectCountdown != null)
+                        txtDisconnectCountdown.text = LocalizationManager.Get("connecting_dots");
+                    break;
+                case DisconnectStatus.ReconnectFailed:
+                    if (txtDisconnectCountdown != null)
+                        txtDisconnectCountdown.text = LocalizationManager.Get("reconnect_failed");
+                    break;
+            }
+        }
+
+        // Corner panels (color names)
+        SetupPlayerCornerPanels();
+    }
+
     // ✅ UpdateTurnUI artık sadece local operasyonlarda kullanılacak
     private void SetupPlayerCornerPanels()
     {
@@ -462,7 +630,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             // Önce hepsini renk adıyla doldur (boş kalmasın)
             for (int i = 0; i < 4; i++)
-                cornerNames[i] = _turnNames[i];
+                cornerNames[i] = TurnName(i);
 
             // Photon'daki gerçek NickName varsa üzerine yaz
             foreach (var kv in PhotonNetwork.CurrentRoom.Players)
@@ -480,7 +648,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             // Offline mod: renk adları
             for (int i = 0; i < 4; i++)
-                cornerNames[i] = _turnNames[i];
+                cornerNames[i] = TurnName(i);
         }
 
         hudView.SetupPlayerCorners(cornerNames, _localPlayerIndex, PlayerCount);
@@ -488,11 +656,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private void UpdateTurnUI()
     {
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
         if (btnRollDice != null)
-            btnRollDice.interactable = (_state.CurrentTurnPlayerIndex == _localPlayerIndex)
-                && !_isRollingDice && !_gameOver && !_isAnimating; // ✅
+            btnRollDice.interactable = !_isSpectator
+                && (_state.CurrentTurnPlayerIndex == _localPlayerIndex)
+                && !_isRollingDice && !_gameOver && !_isAnimating;
     }
 
     private void OnDestroy()
@@ -544,6 +713,44 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         }
         if (panelDisconnect != null) panelDisconnect.SetActive(false);
         if (btnReconnect != null) btnReconnect.gameObject.SetActive(false);
+
+        // ── Spectator tespiti: Awake'de InRoom=false ise buraya kadar ertelenir ──
+        // Bu blok hem fresh spectator'lar (timing fix) hem de reconnect'i olmayan spectator'lar için çalışır.
+        if (!_isSpectator && PhotonNetwork.InRoom)
+        {
+            int ipcR = -1;
+            if (PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue("ipc", out object ipcObjR) && ipcObjR != null)
+                try { ipcR = System.Convert.ToInt32(ipcObjR); } catch { ipcR = -1; }
+
+            bool shouldBeSpectator;
+            if (ipcR > 0)
+            {
+                _initialPlayerCount = ipcR;
+                shouldBeSpectator = PhotonNetwork.LocalPlayer.ActorNumber > ipcR;
+            }
+            else
+            {
+                shouldBeSpectator = PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey("gs");
+            }
+
+            if (shouldBeSpectator)
+            {
+                _isSpectator = true;
+                _localPlayerIndex = -1;
+                if (btnRollDice != null) btnRollDice.interactable = false;
+                Debug.Log($"[OnJoinedRoom] Spectator confirmed (timing fix). ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, ipc={ipcR}");
+                _gameOver = false;
+                return; // Spectator için state restore gerekmiyor
+            }
+        }
+        else if (_isSpectator)
+        {
+            // Zaten spectator — butonu gizli tut ve çık
+            if (btnRollDice != null) btnRollDice.interactable = false;
+            _gameOver = false;
+            return;
+        }
+
         _gameOver = false;
 
         // Only restore state for non-host players (host already has correct state)
@@ -564,7 +771,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             // Update UI
             if (hudView != null)
             {
-                hudView.SetTurn(_turnNames[turn], turn, _localPlayerIndex);
+                hudView.SetTurn(TurnName(turn), turn, _localPlayerIndex);
                 if (roll > 0)
                     hudView.SetDice(roll);
                 else
@@ -575,7 +782,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             if (btnRollDice != null)
             {
                 bool isMyTurn = (turn == _localPlayerIndex);
-                btnRollDice.interactable = isMyTurn && _phase == TurnPhase.AwaitRoll && !_gameOver;
+                btnRollDice.interactable = !_isSpectator && isMyTurn && _phase == TurnPhase.AwaitRoll && !_gameOver;
             }
 
             // Restore pawn states
@@ -674,11 +881,11 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             {
                 // Sıradaki oyuncu hâlâ aktifse, UI güncelle ve timer başlat
                 int currentTurn = _state.CurrentTurnPlayerIndex;
-                hudView.SetTurn(_turnNames[currentTurn], currentTurn, _localPlayerIndex);
+                hudView.SetTurn(TurnName(currentTurn), currentTurn, _localPlayerIndex);
                 hudView.SetDice(-1);
 
                 if (btnRollDice != null)
-                    btnRollDice.interactable = (currentTurn == _localPlayerIndex) && !_gameOver;
+                    btnRollDice.interactable = !_isSpectator && (currentTurn == _localPlayerIndex) && !_gameOver;
 
                 HighlightActivePlayerPawns();
                 StartTurnTimer(rollTimeLimit);
@@ -701,6 +908,23 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             return;
         }
 
+        // İzleyici bağlantısı kesildi → reconnect yok, sadece bilgi göster
+        if (_isSpectator)
+        {
+            if (panelDisconnect != null)
+            {
+                panelDisconnect.SetActive(true);
+                if (txtDisconnectMessage != null)
+                {
+                    _disconnectStatus = DisconnectStatus.Disconnected;
+                    txtDisconnectMessage.text = LocalizationManager.Get("disconnected");
+                }
+                if (txtDisconnectCountdown != null) txtDisconnectCountdown.text = "";
+                if (btnReconnect != null) btnReconnect.gameObject.SetActive(false);
+            }
+            return; // Reconnect coroutine başlatma — oyuncuların reconnect'i ile çakışmasın
+        }
+
         _timerActive = false;
         _gameOver = true;
 
@@ -708,7 +932,10 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             panelDisconnect.SetActive(true);
             if (txtDisconnectMessage != null)
-                txtDisconnectMessage.text = "Bağlantı kesildi!";
+            {
+                _disconnectStatus = DisconnectStatus.Disconnected;
+                txtDisconnectMessage.text = LocalizationManager.Get("disconnected");
+            }
             if (btnReconnect != null)
                 btnReconnect.gameObject.SetActive(true);
         }
@@ -725,14 +952,21 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         while (timeLeft > 0)
         {
             if (txtDisconnectCountdown != null)
-                txtDisconnectCountdown.text = $"Yeniden bağlanılıyor... ({Mathf.CeilToInt(timeLeft)}s)";
+            {
+                _disconnectStatus = DisconnectStatus.Reconnecting;
+                _reconnectTimeLeft = timeLeft;
+                txtDisconnectCountdown.text = string.Format(LocalizationManager.Get("reconnecting"), Mathf.CeilToInt(timeLeft));
+            }
 
             yield return wait;
             timeLeft -= 1f;
         }
 
         if (txtDisconnectCountdown != null)
-            txtDisconnectCountdown.text = "Bağlantı kurulamadı.";
+        {
+            _disconnectStatus = DisconnectStatus.CouldNotConnect;
+            txtDisconnectCountdown.text = LocalizationManager.Get("could_not_connect");
+        }
         if (btnReconnect != null)
             btnReconnect.gameObject.SetActive(false);
     }
@@ -740,7 +974,10 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private void OnReconnectClicked()
     {
         if (txtDisconnectCountdown != null)
-            txtDisconnectCountdown.text = "Bağlanılıyor...";
+        {
+            _disconnectStatus = DisconnectStatus.Connecting;
+            txtDisconnectCountdown.text = LocalizationManager.Get("connecting_dots");
+        }
         if (btnReconnect != null)
             btnReconnect.interactable = false;
         PhotonNetwork.ReconnectAndRejoin();
@@ -763,7 +1000,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         if (panelDisconnect != null && panelDisconnect.activeSelf)
         {
             if (txtDisconnectCountdown != null)
-                txtDisconnectCountdown.text = "Yeniden bağlanılamadı. Tekrar dene.";
+                _disconnectStatus = DisconnectStatus.ReconnectFailed;
+                txtDisconnectCountdown.text = LocalizationManager.Get("reconnect_failed");
             if (btnReconnect != null)
             {
                 btnReconnect.gameObject.SetActive(true);
@@ -823,7 +1061,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         int nextTurn = _state.CurrentTurnPlayerIndex;
         Debug.Log($"[AdvanceTurnAfterHostMigration] New turn: P{nextTurn}");
 
-        hudView.SetTurn(_turnNames[nextTurn], nextTurn, _localPlayerIndex);
+        hudView.SetTurn(TurnName(nextTurn), nextTurn, _localPlayerIndex);
         hudView.SetDice(-1);
 
         if (btnRollDice != null)
@@ -847,8 +1085,23 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         base.OnPlayerLeftRoom(otherPlayer);
 
-        // PlayerTtl > 0 ise geçici disconnect: oyuncu geri dönebilir, işlem yapma
-        if (otherPlayer.IsInactive)
+        // Spectator ayrıldıysa → oyun durumunu hiç değiştirme
+        // ActorNumber > initialPlayerCount → oyun başladıktan sonra katılmış = spectator
+        if (otherPlayer.ActorNumber > _initialPlayerCount)
+        {
+            Debug.Log($"[OnPlayerLeftRoom] Spectator {otherPlayer.ActorNumber} left. No game impact.");
+            return;
+        }
+
+        int leftPlayerIndex = otherPlayer.ActorNumber - 1;
+        Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} (Index={leftPlayerIndex}) left.");
+
+        // Oyunu meşru şekilde bitirmiş oyuncu mu? (finishOrder'da ama disconnectedPlayers'da değil)
+        bool alreadyLegitimatelyFinished = _finishOrder.Contains(leftPlayerIndex)
+                                           && !_disconnectedPlayers.Contains(leftPlayerIndex);
+
+        // Bug 1 Fix: Oyunu bitirmiş biri için 60 saniyelik reconnect penceresini atla
+        if (otherPlayer.IsInactive && !alreadyLegitimatelyFinished)
         {
             Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} is inactive (temporary disconnect). Waiting for reconnect.");
             return;
@@ -856,20 +1109,23 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (_gameOver) return;
 
-        int leftPlayerIndex = otherPlayer.ActorNumber - 1;
-        Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} (Index={leftPlayerIndex}) left.");
-
         // Çıkan oyuncuyu henüz sıralamada değilse sonuncu yap
         if (!_finishOrder.Contains(leftPlayerIndex))
-        {
             _finishOrder.Add(leftPlayerIndex);
-            Debug.Log($"[OnPlayerLeftRoom] P{leftPlayerIndex} added to finish order as #{_finishOrder.Count}");
-        }
-        _disconnectedPlayers.Add(leftPlayerIndex);
-        _botPlayers.Remove(leftPlayerIndex);
 
-        // Çıkan oyuncunun piyonlarını tahtadan kaldır
-        RemoveDisconnectedPlayerPawns(leftPlayerIndex);
+        // Bug 2 Fix: Meşru finisher'ı _disconnectedPlayers'a ekleme → scoreboard korunsun
+        if (!alreadyLegitimatelyFinished)
+        {
+            _disconnectedPlayers.Add(leftPlayerIndex);
+            _botPlayers.Remove(leftPlayerIndex);
+            // Çıkan oyuncunun piyonlarını tahtadan kaldır
+            RemoveDisconnectedPlayerPawns(leftPlayerIndex);
+        }
+        else
+        {
+            Debug.Log($"[OnPlayerLeftRoom] P{leftPlayerIndex} already legitimately finished. Preserving rank.");
+            _botPlayers.Remove(leftPlayerIndex);
+        }
 
         // Kaç aktif (bitmemiş) oyuncu kaldı?
         int totalPlayers = _initialPlayerCount;
@@ -938,7 +1194,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 Debug.Log($"[OnPlayerLeftRoom] New turn: P{nextTurn}");
 
                 // UI'ı güncelle
-                hudView.SetTurn(_turnNames[nextTurn], nextTurn, _localPlayerIndex);
+                hudView.SetTurn(TurnName(nextTurn), nextTurn, _localPlayerIndex);
                 hudView.SetDice(-1);
 
                 if (btnRollDice != null)
@@ -1004,6 +1260,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     // ✅ Zar atma: Sadece kendi sıran ise atabilirsin
     private void OnRollDiceClicked()
     {
+        if (_isSpectator) return;
         if (_paused) return;
         if (_gameOver) return;
         if (_phase != TurnPhase.AwaitRoll) return;
@@ -1021,6 +1278,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private IEnumerator CoRollDiceAnimated()
     {
+        // Safety guard: spectator veya sırası olmayan oyuncu zar atamaz
+        if (_isSpectator || _localPlayerIndex < 0) yield break;
+        if (_state.CurrentTurnPlayerIndex != _localPlayerIndex)
+        {
+            Debug.LogWarning($"[CoRollDiceAnimated] Blocked unauthorized roll: turn={_state.CurrentTurnPlayerIndex}, me={_localPlayerIndex}, isSpectator={_isSpectator}");
+            yield break;
+        }
+
         // Timer hâlâ aktifse ve bu local oyuncu ise: manuel zar attı → bot modundan çıkar
         if (_timerActive && PhotonNetwork.IsMasterClient
             && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
@@ -1054,7 +1319,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             }
         }
 
-        hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         sfx?.PlayDice();
 
         float elapsed = 0f;
@@ -1151,7 +1416,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 _extraTurnsEarned--;
                 _currentRoll = -1;
                 hudView.SetDice(-1);
-                if (btnRollDice != null) btnRollDice.interactable = !_gameOver;
+                if (btnRollDice != null)
+                    btnRollDice.interactable = !_isSpectator && !_gameOver
+                        && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
                 HighlightActivePlayerPawns();
             }
             else
@@ -1302,7 +1569,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     // ✅ Zar ve UI'ı TÜM oyuncular için güncelle
     _currentRoll = roll;
-    hudView.SetTurn(_turnNames[playerIndex], playerIndex, _localPlayerIndex);
+    hudView.SetTurn(TurnName(playerIndex), playerIndex, _localPlayerIndex);
 
     // ✅ Çift zar atmayı engelle
     if (btnRollDice != null)
@@ -1425,7 +1692,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTurn(int nextPlayerIndex)
 {
-    Debug.Log($"[RPC RECEIVED] Turn: Now P{nextPlayerIndex} ({_turnNames[nextPlayerIndex]})");
+    Debug.Log($"[RPC RECEIVED] Turn: Now P{nextPlayerIndex} ({TurnName(nextPlayerIndex)})");
 
     // ✅ FIX: Animasyon flag'lerini sıfırla (host animasyonu client'tan önce bitebilir, race condition)
     _isAnimating = false;
@@ -1442,7 +1709,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     _currentRoll = -1;
 
     hudView.SetDice(-1);
-    hudView.SetTurn(_turnNames[nextPlayerIndex], nextPlayerIndex, _localPlayerIndex);
+    hudView.SetTurn(TurnName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
 
     if (btnRollDice != null)
     {
@@ -1609,7 +1876,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         else if (!PhotonNetwork.InRoom)
         {
             hudView.SetDice(-1);
-            hudView.SetTurn(_turnNames[_state.CurrentTurnPlayerIndex], _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+            hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
             if (btnRollDice != null)
                 btnRollDice.interactable = !_gameOver;
@@ -1931,7 +2198,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         foreach (int idx in _finishOrder)
         {
             if (!_disconnectedPlayers.Contains(idx))
-                displayEntries.Add(_turnNames[idx]);
+                displayEntries.Add(TurnName(idx));
         }
 
         // 2. Hala oynayan oyuncular → "???"
@@ -1945,7 +2212,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         foreach (int idx in _finishOrder)
         {
             if (_disconnectedPlayers.Contains(idx))
-                displayEntries.Add(_turnNames[idx]);
+                displayEntries.Add(TurnName(idx));
         }
 
         // Göster
@@ -1958,20 +2225,22 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         }
 
         if (txtScoreboardTitle != null)
-            txtScoreboardTitle.text = _gameOver ? "Oyun Bitti!" : "Sıralama";
+            txtScoreboardTitle.text = _gameOver ? LocalizationManager.Get("game_over") : LocalizationManager.Get("rankings");
 
         // X butonu: oyun devam ediyorsa göster, bittiyse gizle
         if (btnScoreboardClose != null)
             btnScoreboardClose.gameObject.SetActive(!_gameOver);
 
-        // Ana Menü butonu: sadece oyun bittiyse VE yerel oyuncu da bitirmişse göster
+        // Ana Menü butonu: sadece oyun bittiyse VE yerel oyuncu da bitirmişse (ya da spectator) göster
         if (btnMainMenu != null)
         {
-            bool localPlayerFinished = _finishOrder.Contains(_localPlayerIndex);
+            bool localPlayerFinished = _isSpectator || _finishOrder.Contains(_localPlayerIndex);
             btnMainMenu.gameObject.SetActive(_gameOver && localPlayerFinished);
         }
 
-        scoreboardPanel.SetActive(true);
+        // Spectator için oyun bitmeden paneli açma
+        if (!_isSpectator || _gameOver)
+            scoreboardPanel.SetActive(true);
     }
 
     private void OnScoreboardClose()
@@ -2354,7 +2623,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (_phase == TurnPhase.AwaitRoll)
         {
             if (btnRollDice != null)
-                btnRollDice.interactable = !_isRollingDice && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+                btnRollDice.interactable = !_isSpectator && !_isRollingDice && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
 
             foreach (var kv in _pawnStates)
                 kv.Key.SetClickable(false);
@@ -2366,7 +2635,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (_phase == TurnPhase.AwaitMove)
         {
             if (btnRollDice != null)
-                btnRollDice.interactable = !_isRollingDice && !_isAnimating
+                btnRollDice.interactable = !_isSpectator && !_isRollingDice && !_isAnimating
                     && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
 
             foreach (var kv in _pawnStates)
@@ -2394,8 +2663,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             Screen.fullScreen = !Screen.fullScreen;
         }
 
-        // ✅ Turn Timer Tick
-        if (_timerActive && !_gameOver && !_paused)
+        // ✅ Turn Timer Tick — _paused sadece interaction'ı engeller, timer her zaman akar
+        if (_timerActive && !_gameOver)
         {
             _turnTimer -= Time.deltaTime;
             hudView?.SetTimer(_turnTimer);
@@ -2467,26 +2736,34 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnTurnTimerExpired()
     {
+        if (_isSpectator) return;
         Debug.Log($"[Timer] Expired! Phase={_phase}, Turn=P{_state.CurrentTurnPlayerIndex}");
 
-        // Tüm clientlarda: kendi sıramsa lokal bot moduna gir
-        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex)
-            SetLocalBotMode(true);
+        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
 
-        // Online: sadece host timeout kararını alır
+        // Kendi sıramsa: lokal bot modu + otomatik oyna (host veya client fark etmez)
+        if (isMyTurn)
+        {
+            SetLocalBotMode(true);
+            _botPlayers.Add(_state.CurrentTurnPlayerIndex);
+
+            if (_phase == TurnPhase.AwaitRoll)
+                AutoRollDice();
+            else if (_phase == TurnPhase.AwaitMove)
+                AutoMovePawn();
+            return;
+        }
+
+        // Sıra bizde değil → sadece host devam eder (bot/disconnected oyuncu yönetimi)
         if (PhotonNetwork.InRoom && !PhotonNetwork.IsMasterClient) return;
 
-        // Bot moduna al
+        // Host: sıradaki oyuncu bot modunda veya disconnected
+        // AwaitRoll için host zar atamaz (CoRollDiceAnimated kendi sırasını kontrol eder)
+        // AwaitMove için host adına piyon seçimi yapabilir
         _botPlayers.Add(_state.CurrentTurnPlayerIndex);
 
-        if (_phase == TurnPhase.AwaitRoll)
-        {
-            AutoRollDice();
-        }
-        else if (_phase == TurnPhase.AwaitMove)
-        {
+        if (_phase == TurnPhase.AwaitMove)
             AutoMovePawn();
-        }
     }
 
     private void AutoRollDice()
