@@ -15,6 +15,7 @@ namespace LudoFriends.Presentation
 
 [Header("Dice")]
 [SerializeField] private Image diceBG;             // ✅ YENİ: Zar arka plan çerçevesi
+[SerializeField] private DiceAnimator diceAnimator; // Sprite tabanlı zar animatörü
 
 [Header("Roll Button")]
 [SerializeField] private Image rollButtonImage;     // ✅ YENİ: Roll butonunun Image'ı
@@ -133,9 +134,39 @@ namespace LudoFriends.Presentation
             diceContainer.position += targetCenter - diceCenter;
         }
 
+        /// <summary>
+        /// Zar roll animasyonunu başlatır (looping sprite).
+        /// </summary>
+        public void StartDiceRollAnimation()
+        {
+            if (diceAnimator != null)
+            {
+                diceAnimator.PlayRolling();
+                if (txtDice != null) txtDice.gameObject.SetActive(false);
+            }
+        }
+
         public void SetDice(int value)
         {
-            txtDice.text = value < 0 ? "-" : value.ToString();
+            if (diceAnimator != null)
+            {
+                if (value < 0)
+                {
+                    diceAnimator.Hide();
+                    if (txtDice != null) txtDice.gameObject.SetActive(true);
+                    txtDice.text = "-";
+                }
+                else
+                {
+                    diceAnimator.ShowResult(value);
+                    if (txtDice != null) txtDice.gameObject.SetActive(false);
+                }
+            }
+            else
+            {
+                // Fallback: diceAnimator bağlı değilse eski text davranışı
+                txtDice.text = value < 0 ? "-" : value.ToString();
+            }
         }
 
         // ✅ Timer UI metotları

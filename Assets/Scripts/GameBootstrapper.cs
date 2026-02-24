@@ -1322,14 +1322,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         sfx?.PlayDice();
 
-        float elapsed = 0f;
-        while (elapsed < diceRollDuration)
-        {
-            int fakeValue = Random.Range(1, 7);
-            hudView.SetDice(fakeValue);
-            elapsed += diceTickInterval;
-            yield return new WaitForSeconds(diceTickInterval);
-        }
+        hudView.StartDiceRollAnimation();
+        yield return new WaitForSeconds(diceRollDuration);
 
         // ✅ Finalize visual
         hudView.SetDice(roll);
@@ -1623,14 +1617,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         sfx?.PlayDice();
 
-        float elapsed = 0f;
-        while (elapsed < diceRollDuration)
-        {
-            int fakeValue = Random.Range(1, 7);
-            hudView.SetDice(fakeValue);
-            elapsed += diceTickInterval;
-            yield return new WaitForSeconds(diceTickInterval);
-        }
+        hudView.StartDiceRollAnimation();
+        yield return new WaitForSeconds(diceRollDuration);
 
         hudView.SetDice(finalRoll);
 
