@@ -202,10 +202,12 @@ namespace LudoFriends.Presentation
             panelCornerTop?.Hide();
             panelCornerRight?.Hide();
 
+            // Spectator (localPlayerIndex == -1) tahtayi player 0 perspektifinden gorur
+            int refPlayer = localPlayerIndex >= 0 ? localPlayerIndex : 0;
             for (int i = 0; i < playerCount && i < playerNames.Length; i++)
             {
                 float playerAngle = GetPlayerAngle(i);
-                float localAngle  = GetPlayerAngle(localPlayerIndex);
+                float localAngle  = GetPlayerAngle(refPlayer);
                 float diff = (playerAngle - localAngle + 360f) % 360f;
 
                 // diff → göreceli konum
@@ -229,7 +231,9 @@ namespace LudoFriends.Presentation
         /// </summary>
         public PlayerCornerPanel GetCornerPanelForPlayer(int playerIndex, int localPlayerIndex)
         {
-            float diff = (GetPlayerAngle(playerIndex) - GetPlayerAngle(localPlayerIndex) + 360f) % 360f;
+            // Spectator (localPlayerIndex == -1) tahtayi player 0 perspektifinden gorur
+            int refPlayer = localPlayerIndex >= 0 ? localPlayerIndex : 0;
+            float diff = (GetPlayerAngle(playerIndex) - GetPlayerAngle(refPlayer) + 360f) % 360f;
             if (Mathf.Approximately(diff,   0f)) return panelCornerBottom;
             if (Mathf.Approximately(diff,  90f)) return panelCornerLeft;
             if (Mathf.Approximately(diff, 180f)) return panelCornerTop;

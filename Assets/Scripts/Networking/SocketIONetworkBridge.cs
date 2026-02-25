@@ -20,6 +20,7 @@ namespace LudoFriends.Networking
         public event Action<float> OnTimerStart;
         public event Action OnTimerStop;
         public event Action<string, int> OnChatMessage;
+        public event Action<int> OnExitBot;
 
         // ── Lobby/Room Events (for LobbyManager & GameBootstrapper) ──
         public event Action<JoinedRoomPayload> OnJoinedRoom;
@@ -51,8 +52,10 @@ namespace LudoFriends.Networking
         private GameStatePayload _cachedState;
         private bool _hasGameState;
 
-        // Pending identify (to send from main thread)
+        // Pending actions (to dispatch from main thread — background thread cannot touch Unity API)
         private volatile bool _pendingIdentify;
+        private volatile bool _pendingDisconnect;
+        private volatile bool _pendingReconnect;
         private string _nickname;
 
         // ── Public Properties ──
@@ -94,6 +97,18 @@ namespace LudoFriends.Networking
                     playerId = NetworkConfig.PlayerId,
                     nickname = _nickname
                 });
+            }
+
+            if (_pendingDisconnect)
+            {
+                _pendingDisconnect = false;
+                OnDisconnectedEvent?.Invoke();
+            }
+
+            if (_pendingReconnect)
+            {
+                _pendingReconnect = false;
+                OnReconnected?.Invoke();
             }
         }
 
@@ -153,19 +168,15 @@ namespace LudoFriends.Networking
             {
                 Debug.Log($"[SocketIO] Disconnected: {reason}");
                 _isConnected = false;
-                OnDisconnectedEvent?.Invoke();
+                _pendingDisconnect = true; // Main thread'de invoke edilecek (Unity API guvenli)
             };
 
             _socket.OnReconnected += (sender, attempts) =>
             {
                 Debug.Log($"[SocketIO] Reconnected after {attempts} attempts");
                 _isConnected = true;
-                _socket.Emit("identify", new
-                {
-                    playerId = NetworkConfig.PlayerId,
-                    nickname = PlayerPrefs.GetString("PlayerName", "Player")
-                });
-                OnReconnected?.Invoke();
+                _pendingIdentify = true; // Re-identify on main thread
+                _pendingReconnect = true; // Main thread'de invoke edilecek
             };
 
             // ── Identity ──
@@ -300,6 +311,12 @@ namespace LudoFriends.Networking
                 OnRequestAdvanceTurn?.Invoke();
             });
 
+            _socket.OnUnityThread("exit_bot_fwd", response =>
+            {
+                var data = response.GetValue<ExitBotPayload>();
+                OnExitBot?.Invoke(data.playerIndex);
+            });
+
             _socket.OnUnityThread("timer_start", response =>
             {
                 var data = response.GetValue<TimerStartPayload>();
@@ -409,6 +426,14 @@ namespace LudoFriends.Networking
                 OnRequestAdvanceTurn?.Invoke();
             else
                 _socket?.Emit("request_advance_turn");
+        }
+
+        public void SendExitBot(int playerIndex)
+        {
+            if (_isHost)
+                OnExitBot?.Invoke(playerIndex);
+            else
+                _socket?.Emit("exit_bot", new { playerIndex });
         }
 
         public void BroadcastTimerStart(float duration)

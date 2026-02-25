@@ -6,7 +6,7 @@ namespace LudoFriends.Networking
     {
         // Geliştirme: Bilgisayarının yerel IP adresi (aynı WiFi'daki telefonlar erişebilir)
         // Yayın: Gerçek sunucu adresiyle değiştir
-        public static string ServerUrl = "http://192.168.1.104:3000";
+        public static string ServerUrl = "http://3.249.24.200:3000";
 
         private const string PLAYER_ID_KEY = "rm_player_id";
 

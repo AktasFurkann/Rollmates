@@ -101,6 +101,7 @@ public class GameBootstrapper : MonoBehaviour
     private bool _isLeavingToMainMenu = false;
     private bool _isIntentionalDisconnect = false;
     private bool _localBotMode = false;
+    private bool _tookManualControl = false; // Take Control sonrasi host timer broadcast'ini yoksay
     private bool _isSpectator = false;
     private readonly List<int> _finishOrder = new List<int>();
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
@@ -193,6 +194,7 @@ public class GameBootstrapper : MonoBehaviour
             _bridge.OnDisconnectedEvent += OnBridgeDisconnected;
             _bridge.OnPlayerLeft += OnBridgePlayerLeft;
             _bridge.OnPlayerJoined += OnBridgePlayerJoined;
+            _bridge.OnExitBot += OnNetworkExitBot;
         }
 
         // Player index + spectator tespiti + initialPlayerCount
@@ -663,16 +665,13 @@ public class GameBootstrapper : MonoBehaviour
                 _localPlayerIndex = -1;
                 if (btnRollDice != null) btnRollDice.interactable = false;
                 Debug.Log($"[OnJoinedRoom] Spectator confirmed (timing fix).");
-                _gameOver = false;
-                return; // Spectator icin state restore gerekmiyor
+                // Spectator da state restore yapacak (asagida devam ediyor)
             }
         }
         else if (_isSpectator)
         {
-            // Zaten spectator -- butonu gizli tut ve cik
+            // Zaten spectator -- butonu gizli tut
             if (btnRollDice != null) btnRollDice.interactable = false;
-            _gameOver = false;
-            return;
         }
 
         _gameOver = false;
@@ -1666,6 +1665,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     _phase = TurnPhase.AwaitRoll;
     _isRollingDice = false;
     _currentRoll = -1;
+    _tookManualControl = false; // Sira degisiminde manual control flag sifirla
 
     hudView.SetDice(-1);
     hudView.SetTurn(TurnName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
@@ -1707,6 +1707,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStart(float duration)
     {
+        // Take Control sonrasi host'tan gelen kisa bot timer'ini yoksay
+        if (_tookManualControl && _state.CurrentTurnPlayerIndex == _localPlayerIndex)
+        {
+            Debug.Log($"[Timer] Ignoring host timer ({duration}s) - player took manual control");
+            return;
+        }
+
         // Start local timer display for all clients
         _timerActive = true;
         _turnTimer = duration;
@@ -2238,19 +2245,53 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     private void OnTakeControlClicked()
     {
         SetLocalBotMode(false);
+        _botPlayers.Remove(_localPlayerIndex);
+        _tookManualControl = true;
 
-        if (_bridge != null && _bridge.IsHost)
+        // Timer'i durdur ve normal sureli yeniden baslat
+        StopTurnTimer(false);
+        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_gameOver)
         {
-            // Host kendi bot modundan cikiyor
-            _botPlayers.Remove(_localPlayerIndex);
+            if (_phase == TurnPhase.AwaitRoll)
+            {
+                if (btnRollDice != null) btnRollDice.interactable = true;
+                StartTurnTimer(rollTimeLimit);
+            }
+            else if (_phase == TurnPhase.AwaitMove)
+            {
+                var legal = GetLegalMoves(_localPlayerIndex, _currentRoll);
+                if (legal.Count > 0)
+                {
+                    HighlightLegalMoves(legal);
+                    SetOnlyLegalClickable(legal);
+                }
+                StartTurnTimer(moveTimeLimit);
+            }
         }
-        else if (_bridge != null && _bridge.IsInRoom)
+
+        // Host'a bildir (host _botPlayers'dan cikarmasi icin)
+        if (_bridge != null && _bridge.IsInRoom)
         {
-            // Client -> host'a bildir (bridge property uzerinden)
-            _bridge.SetRoomProperty($"exitbot_{_localPlayerIndex}", (int)_bridge.ServerTime);
+            _bridge.SendExitBot(_localPlayerIndex);
         }
 
         Debug.Log($"[BotMode] P{_localPlayerIndex} took manual control via button.");
+    }
+
+    private void OnNetworkExitBot(int playerIndex)
+    {
+        _botPlayers.Remove(playerIndex);
+        Debug.Log($"[BotMode] P{playerIndex} exited bot mode (network).");
+
+        // Host: timer'i normal sureyle yeniden baslat ve broadcast et
+        if (_bridge != null && _bridge.IsHost && _state.CurrentTurnPlayerIndex == playerIndex)
+        {
+            StopTurnTimer();
+            if (_phase == TurnPhase.AwaitRoll)
+                StartTurnTimer(rollTimeLimit);
+            else if (_phase == TurnPhase.AwaitMove)
+                StartTurnTimer(moveTimeLimit);
+        }
     }
 
     // NOTE: OnRoomPropertiesUpdate was a Photon callback.
@@ -2660,6 +2701,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStop()
     {
+        // Take Control sonrasi host'tan gelen timer_stop'u yoksay
+        if (_tookManualControl && _state.CurrentTurnPlayerIndex == _localPlayerIndex)
+        {
+            Debug.Log("[Timer] Ignoring host timer stop - player took manual control");
+            return;
+        }
+
         // Stop local timer display for all clients
         StopTurnTimer(false);
     }
@@ -2687,10 +2735,16 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         // Sira bizde degil -> sadece host devam eder (bot/disconnected oyuncu yonetimi)
         if (_bridge != null && _bridge.IsInRoom && !_bridge.IsHost) return;
 
-        // Host: siradaki oyuncu bot modunda veya disconnected
+        // Host: siradaki oyuncuyu bot olarak isaretle (kisa timer icin)
         _botPlayers.Add(_state.CurrentTurnPlayerIndex);
 
-        if (_phase == TurnPhase.AwaitMove)
+        // Bagli oyuncular kendi bot modunu kendileri yonetiyor (yukaridaki isMyTurn blogu).
+        // Host sadece gecici kopuk (disconnected) oyuncular icin auto-play yapar.
+        if (!_tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)) return;
+
+        if (_phase == TurnPhase.AwaitRoll)
+            AutoRollDice();
+        else if (_phase == TurnPhase.AwaitMove)
             AutoMovePawn();
     }
 
@@ -2703,6 +2757,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void AutoMovePawn()
     {
+        if (_isAnimating || _isRollingDice) return;
         int turn = _state.CurrentTurnPlayerIndex;
         var legal = GetLegalMoves(turn, _currentRoll);
         if (legal.Count == 0) return;
@@ -2896,8 +2951,29 @@ private void OnBoardAreaClicked(Vector2 screenPos)
                 state.EnterMainAt(mainIndex);
             }
 
+            // Update _pawnCurrentWaypoint for correct movement tracking
+            int ownerIdx = _pawnOwner[pawn];
+            if (_pawnCurrentWaypoint.TryGetValue(pawn, out int oldWp))
+                positionManager?.UnregisterPawnFromWaypoint(pawn, oldWp);
+
+            if (zone == PawnZone.MainPath)
+            {
+                _pawnCurrentWaypoint[pawn] = mainIndex;
+                positionManager?.RegisterPawnAtWaypoint(pawn, mainIndex);
+            }
+            else if (zone == PawnZone.HomeLane && !isFinished)
+            {
+                int homeKey = GetHomeLaneKey(ownerIdx, homeIndex);
+                _pawnCurrentWaypoint[pawn] = homeKey;
+                positionManager?.RegisterPawnAtWaypoint(pawn, homeKey);
+            }
+            else
+            {
+                _pawnCurrentWaypoint.Remove(pawn);
+            }
+
             // Restore visual position
-            Vector3 pos = GetPawnVisualPosition(pawn, state, _pawnOwner[pawn]);
+            Vector3 pos = GetPawnVisualPosition(pawn, state, ownerIdx);
             pawn.SetPosition(pos);
             restored++;
         }

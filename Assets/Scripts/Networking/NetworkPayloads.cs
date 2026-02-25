@@ -133,6 +133,12 @@ namespace LudoFriends.Networking
     }
 
     [Serializable]
+    public class ExitBotPayload
+    {
+        public int playerIndex;
+    }
+
+    [Serializable]
     public class ChatPayload
     {
         public string message;
