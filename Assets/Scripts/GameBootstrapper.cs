@@ -1707,10 +1707,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStart(float duration)
     {
-        // Take Control sonrasi host'tan gelen kisa bot timer'ini yoksay
-        if (_tookManualControl && _state.CurrentTurnPlayerIndex == _localPlayerIndex)
+        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan
+        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_localBotMode)
         {
-            Debug.Log($"[Timer] Ignoring host timer ({duration}s) - player took manual control");
+            Debug.Log($"[Timer] Ignoring host timer ({duration}s) - local player is active (not bot)");
             return;
         }
 
@@ -2284,7 +2284,9 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         Debug.Log($"[BotMode] P{playerIndex} exited bot mode (network).");
 
         // Host: timer'i normal sureyle yeniden baslat ve broadcast et
-        if (_bridge != null && _bridge.IsHost && _state.CurrentTurnPlayerIndex == playerIndex)
+        // ANCAK kendi exit_bot'umuzsa (Take Control), OnTakeControlClicked zaten halletti
+        if (_bridge != null && _bridge.IsHost && _state.CurrentTurnPlayerIndex == playerIndex
+            && playerIndex != _localPlayerIndex)
         {
             StopTurnTimer();
             if (_phase == TurnPhase.AwaitRoll)
@@ -2640,8 +2642,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             _turnTimer -= Time.deltaTime;
             hudView?.SetTimer(_turnTimer);
 
-            // 3 saniye kala clock sesi cal
-            if (_turnTimer <= 3f && !_clockPlayed)
+            // 3 saniye kala clock sesi cal (bot oyuncular icin calma)
+            if (_turnTimer <= 3f && !_clockPlayed && !_botPlayers.Contains(_state.CurrentTurnPlayerIndex))
             {
                 _clockPlayed = true;
                 sfx?.PlayClock();
@@ -2701,10 +2703,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStop()
     {
-        // Take Control sonrasi host'tan gelen timer_stop'u yoksay
-        if (_tookManualControl && _state.CurrentTurnPlayerIndex == _localPlayerIndex)
+        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan
+        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_localBotMode)
         {
-            Debug.Log("[Timer] Ignoring host timer stop - player took manual control");
+            Debug.Log("[Timer] Ignoring host timer stop - local player is active (not bot)");
             return;
         }
 
