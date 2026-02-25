@@ -1,12 +1,11 @@
-using Photon.Pun;
-using Photon.Realtime;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using System.Collections;
+using LudoFriends.Networking;
 
-public class LobbyManager : MonoBehaviourPunCallbacks
+public class LobbyManager : MonoBehaviour
 {
     [Header("Panels")]
     [SerializeField] private GameObject panelButtons;     // Create/Join butonları
@@ -17,8 +16,8 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [SerializeField] private Button btnJoin;
     [SerializeField] private Button btnBack;
     [SerializeField] private Button btnShare;
-    [SerializeField] private Button btnStartGame; // ✅ Enhancement 1: Host manual start
-    [SerializeField] private Button btnSpectate;  // İzleyici modu toggle
+    [SerializeField] private Button btnStartGame;
+    [SerializeField] private Button btnSpectate;
     [SerializeField] private TMP_InputField inputRoomCode;
 
     [Header("Texts")]
@@ -28,9 +27,9 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [SerializeField] private TMP_Text txtPlayerCount;
 
     [Header("Player Slots")]
-    [SerializeField] private Image[] playerSlotImages;    // 4 slot (renk gösterimi)
-    [SerializeField] private TMP_Text[] playerSlotNames;  // 4 slot (isim)
-    [SerializeField] private GameObject[] playerSlotObjects; // 4 slot objesi (aktif/pasif)
+    [SerializeField] private Image[] playerSlotImages;
+    [SerializeField] private TMP_Text[] playerSlotNames;
+    [SerializeField] private GameObject[] playerSlotObjects;
 
     [Header("Config")]
     [SerializeField] private string gameSceneName = "GameScene";
@@ -41,24 +40,25 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     [Header("Audio")]
     [SerializeField] private AudioSource sfxSource;
     [SerializeField] private AudioClip clickSound;
-    [SerializeField] private AudioClip gameStartSound; // ✅ Oyun başlama sesi
+    [SerializeField] private AudioClip gameStartSound;
 
     [Header("Create Choice Panel")]
-[SerializeField] private GameObject panelCreateChoice;
-[SerializeField] private Button btnPublic;
-[SerializeField] private Button btnPrivate;
-[SerializeField] private Button btnCancelChoice;
+    [SerializeField] private GameObject panelCreateChoice;
+    [SerializeField] private Button btnPublic;
+    [SerializeField] private Button btnPrivate;
+    [SerializeField] private Button btnCancelChoice;
 
     private bool _gameStarted = false;
     private bool _localIsSpectating = false;
     private Coroutine _countdownCoroutine;
     private string _currentRoomCode = "";
+    private SocketIONetworkBridge _bridge;
 
     private readonly Color[] _playerColors = new Color[]
     {
         new Color(0.9f, 0.2f, 0.2f),  // Kırmızı
-        new Color(0.95f, 0.85f, 0.1f), // Sarı (Was Green)
-        new Color(0.2f, 0.8f, 0.2f),  // Yeşil (Was Yellow)
+        new Color(0.95f, 0.85f, 0.1f), // Sarı
+        new Color(0.2f, 0.8f, 0.2f),  // Yeşil
         new Color(0.2f, 0.4f, 0.9f)   // Mavi
     };
 
@@ -70,16 +70,15 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     }
     private LobbyStatus _currentStatus = LobbyStatus.None;
 
-    public override void OnEnable()
+    private void OnEnable()
     {
-        base.OnEnable();
         LocalizationManager.OnLanguageChanged += RefreshLocalization;
     }
 
-    public override void OnDisable()
+    private void OnDisable()
     {
-        base.OnDisable();
         LocalizationManager.OnLanguageChanged -= RefreshLocalization;
+        UnsubscribeBridge();
     }
 
     private void RefreshLocalization()
@@ -105,8 +104,6 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 
     private void Start()
     {
-        PhotonNetwork.AutomaticallySyncScene = true;
-
         // Panelleri ayarla
         if (panelButtons != null) panelButtons.SetActive(false);
         if (panelWaiting != null) panelWaiting.SetActive(false);
@@ -116,34 +113,37 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         btnJoin?.onClick.AddListener(OnJoinClicked);
         btnBack?.onClick.AddListener(OnBackClicked);
         btnShare?.onClick.AddListener(OnShareClicked);
-
         btnPublic?.onClick.AddListener(OnPublicClicked);
-btnPrivate?.onClick.AddListener(OnPrivateClicked);
-btnCancelChoice?.onClick.AddListener(OnCancelChoiceClicked);
-        btnStartGame?.onClick.AddListener(OnStartGameClicked); // ✅ Enhancement 1
+        btnPrivate?.onClick.AddListener(OnPrivateClicked);
+        btnCancelChoice?.onClick.AddListener(OnCancelChoiceClicked);
+        btnStartGame?.onClick.AddListener(OnStartGameClicked);
         btnSpectate?.onClick.AddListener(OnSpectateClicked);
 
-if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
+        if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 
         // Player slot'ları gizle
         HideAllPlayerSlots();
 
         if (txtCountdown != null) txtCountdown.text = "";
-        if (btnStartGame != null) btnStartGame.gameObject.SetActive(false); // ✅ Enhancement 1: Hide initially
+        if (btnStartGame != null) btnStartGame.gameObject.SetActive(false);
         if (btnSpectate != null) btnSpectate.gameObject.SetActive(false);
 
-        if (PhotonNetwork.IsConnectedAndReady)
+        // SocketIO bridge'i bul veya oluştur
+        _bridge = SocketIONetworkBridge.Instance;
+        if (_bridge == null)
         {
-            _currentStatus = LobbyStatus.Connected;
-            txtStatus.text = LocalizationManager.Get("connected");
-            PhotonNetwork.JoinLobby();
+            var go = new GameObject("SocketIONetworkBridge");
+            _bridge = go.AddComponent<SocketIONetworkBridge>();
         }
-        else
-        {
-            _currentStatus = LobbyStatus.Connecting;
-            txtStatus.text = LocalizationManager.Get("connecting");
-            PhotonNetwork.ConnectUsingSettings();
-        }
+
+        SubscribeBridge();
+
+        // Sunucuya bağlan
+        _currentStatus = LobbyStatus.Connecting;
+        txtStatus.text = LocalizationManager.Get("connecting");
+
+        string nickname = PlayerPrefs.GetString("PlayerName", "Player");
+        _bridge.Connect(nickname);
 
         DeepLinkManager.OnPendingCodeChanged += OnDeepLinkReceived;
     }
@@ -156,26 +156,60 @@ if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
         btnShare?.onClick.RemoveListener(OnShareClicked);
         DeepLinkManager.OnPendingCodeChanged -= OnDeepLinkReceived;
         btnPublic?.onClick.RemoveListener(OnPublicClicked);
-btnPrivate?.onClick.RemoveListener(OnPrivateClicked);
-btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
-        btnStartGame?.onClick.RemoveListener(OnStartGameClicked); // ✅ Enhancement 1
+        btnPrivate?.onClick.RemoveListener(OnPrivateClicked);
+        btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
+        btnStartGame?.onClick.RemoveListener(OnStartGameClicked);
         btnSpectate?.onClick.RemoveListener(OnSpectateClicked);
+
+        UnsubscribeBridge();
 
         if (_countdownCoroutine != null)
             StopCoroutine(_countdownCoroutine);
     }
 
-    // ==================== PHOTON CALLBACKS ====================
+    // ==================== BRIDGE EVENT SUBSCRIPTIONS ====================
 
-    public override void OnConnectedToMaster()
+    private void SubscribeBridge()
     {
-        _currentStatus = LobbyStatus.Connected;
-        txtStatus.text = LocalizationManager.Get("connected");
-        PhotonNetwork.JoinLobby();
+        if (_bridge == null) return;
+        _bridge.OnIdentified += OnBridgeIdentified;
+        _bridge.OnRoomCreated += OnBridgeRoomCreated;
+        _bridge.OnJoinedRoom += OnBridgeJoinedRoom;
+        _bridge.OnPlayerJoined += OnBridgePlayerJoined;
+        _bridge.OnPlayerLeft += OnBridgePlayerLeft;
+        _bridge.OnJoinFailed += OnBridgeJoinFailed;
+        _bridge.OnHostChanged += OnBridgeHostChanged;
+        _bridge.OnGameStarted += OnBridgeGameStarted;
+        _bridge.OnCountdownTick += OnBridgeCountdownTick;
+        _bridge.OnDisconnectedEvent += OnBridgeDisconnected;
     }
 
-    public override void OnJoinedLobby()
+    private void UnsubscribeBridge()
     {
+        if (_bridge == null) return;
+        _bridge.OnIdentified -= OnBridgeIdentified;
+        _bridge.OnRoomCreated -= OnBridgeRoomCreated;
+        _bridge.OnJoinedRoom -= OnBridgeJoinedRoom;
+        _bridge.OnPlayerJoined -= OnBridgePlayerJoined;
+        _bridge.OnPlayerLeft -= OnBridgePlayerLeft;
+        _bridge.OnJoinFailed -= OnBridgeJoinFailed;
+        _bridge.OnHostChanged -= OnBridgeHostChanged;
+        _bridge.OnGameStarted -= OnBridgeGameStarted;
+        _bridge.OnCountdownTick -= OnBridgeCountdownTick;
+        _bridge.OnDisconnectedEvent -= OnBridgeDisconnected;
+    }
+
+    // ==================== BRIDGE CALLBACKS ====================
+
+    private void OnBridgeIdentified(IdentifiedPayload data)
+    {
+        if (!data.success)
+        {
+            _currentStatus = LobbyStatus.Disconnected;
+            txtStatus.text = LocalizationManager.Get("disconnected");
+            return;
+        }
+
         _currentStatus = LobbyStatus.Ready;
         txtStatus.text = LocalizationManager.Get("ready");
         if (panelButtons != null) panelButtons.SetActive(true);
@@ -184,108 +218,129 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         if (btnCreate != null) btnCreate.interactable = true;
         if (btnJoin != null) btnJoin.interactable = true;
 
+        // Reconnection check
+        if (!string.IsNullOrEmpty(data.reconnectRoomCode))
+        {
+            _bridge.JoinRoom(data.reconnectRoomCode);
+            return;
+        }
+
         CheckAndConsumeDeepLink();
     }
 
-    public override void OnCreatedRoom()
+    private void OnBridgeRoomCreated(RoomCreatedPayload data)
     {
-        _currentRoomCode = PhotonNetwork.CurrentRoom.Name;
+        _currentRoomCode = data.code;
         _currentStatus = LobbyStatus.RoomCreated;
         txtStatus.text = LocalizationManager.Get("room_created");
         SetRoomCodeUI(_currentRoomCode);
     }
 
-    public override void OnJoinedRoom()
+    private void OnBridgeJoinedRoom(JoinedRoomPayload data)
     {
         // Oyun zaten başlamışsa → spectator olarak direkt game scene'e git
-        if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey("gs"))
+        if (data.gameStarted)
         {
             SceneManager.LoadScene(gameSceneName);
             return;
         }
 
-        // Yeni odaya katıldık → spec flag'ini sıfırla (geç katılım tespiti için)
         _localIsSpectating = false;
 
-        // Buton panelini gizle, bekleme panelini göster
         if (panelButtons != null) panelButtons.SetActive(false);
         if (panelWaiting != null) panelWaiting.SetActive(true);
 
-        _currentRoomCode = PhotonNetwork.CurrentRoom.Name;
+        _currentRoomCode = data.code;
         SetRoomCodeUI(_currentRoomCode);
         UpdatePlayerList();
 
-        // ✅ Enhancement 1: Show/hide start button based on host status
         if (btnStartGame != null)
         {
-            btnStartGame.gameObject.SetActive(PhotonNetwork.IsMasterClient);
-            btnStartGame.interactable = PhotonNetwork.CurrentRoom.PlayerCount >= minPlayersToStart;
+            btnStartGame.gameObject.SetActive(data.isHost);
+            btnStartGame.interactable = data.players.Length >= minPlayersToStart;
         }
 
-        // İzleyici butonu lobide gizli kalır — izleyici yalnızca oyun başladıktan sonra katılan geç gelenlerdir.
         if (btnSpectate != null)
             btnSpectate.gameObject.SetActive(false);
 
-        // ✅ NEW (Fix 3): Show waiting message for clients
         if (txtCountdown != null)
         {
-            if (PhotonNetwork.IsMasterClient)
+            if (data.isHost)
             {
-                // Host will display countdown when it starts
                 txtCountdown.text = "";
+                // Host: geri sayım başlat
+                if (!_gameStarted)
+                {
+                    _gameStarted = true;
+                    _countdownCoroutine = StartCoroutine(CountdownAndStart());
+                }
             }
             else
             {
-                // Clients see waiting message
                 _currentStatus = LobbyStatus.WaitingForHost;
                 txtCountdown.text = LocalizationManager.Get("waiting_for_host");
             }
         }
+    }
 
-        // Host: geri sayım başlat
-        if (PhotonNetwork.IsMasterClient && !_gameStarted)
+    private void OnBridgePlayerJoined(PlayerJoinedPayload data)
+    {
+        UpdatePlayerList();
+    }
+
+    private void OnBridgePlayerLeft(PlayerLeftPayload data)
+    {
+        UpdatePlayerList();
+    }
+
+    private void OnBridgeJoinFailed(JoinFailedPayload data)
+    {
+        switch (data.reason)
         {
-            _gameStarted = true;
-            _countdownCoroutine = StartCoroutine(CountdownAndStart());
+            case "no_rooms_available":
+            case "room_not_found":
+                _currentStatus = LobbyStatus.RoomNotFound;
+                txtStatus.text = LocalizationManager.Get("room_not_found");
+                break;
+            case "room_full":
+                _currentStatus = LobbyStatus.RoomNotFoundFull;
+                txtStatus.text = LocalizationManager.Get("room_not_found_full");
+                break;
+            default:
+                txtStatus.text = $"Katılma hatası: {data.reason}";
+                break;
         }
-    }
 
-    public override void OnJoinRandomFailed(short returnCode, string message)
-{
-    _currentStatus = LobbyStatus.RoomNotFound;
-    txtStatus.text = LocalizationManager.Get("room_not_found");
-
-    if (btnCreate != null) btnCreate.interactable = true;
-    if (btnJoin != null) btnJoin.interactable = true;
-}
-
-    public override void OnPlayerEnteredRoom(Player newPlayer)
-    {
-        UpdatePlayerList();
-    }
-
-    public override void OnPlayerLeftRoom(Player otherPlayer)
-    {
-        UpdatePlayerList();
-    }
-
-    public override void OnJoinRoomFailed(short returnCode, string message)
-{
-    _currentStatus = LobbyStatus.RoomNotFoundFull;
-    txtStatus.text = LocalizationManager.Get("room_not_found_full");
-
-    if (btnCreate != null) btnCreate.interactable = true;
-    if (btnJoin != null) btnJoin.interactable = true;
-}
-
-    public override void OnCreateRoomFailed(short returnCode, string message)
-    {
-        txtStatus.text = $"Oda oluşturulamadı: {message}";
         if (btnCreate != null) btnCreate.interactable = true;
         if (btnJoin != null) btnJoin.interactable = true;
     }
 
-    public override void OnDisconnected(DisconnectCause cause)
+    private void OnBridgeHostChanged(HostChangedPayload data)
+    {
+        bool amIHost = data.newHostPlayerId == NetworkConfig.PlayerId;
+        if (btnStartGame != null)
+            btnStartGame.gameObject.SetActive(amIHost);
+        UpdatePlayerList();
+    }
+
+    private void OnBridgeGameStarted(GameStartedPayload data)
+    {
+        _currentStatus = LobbyStatus.LoadingGame;
+        if (txtStatus != null) txtStatus.text = LocalizationManager.Get("loading_game");
+
+        if (sfxSource != null && gameStartSound != null)
+            sfxSource.PlayOneShot(gameStartSound);
+
+        SceneManager.LoadScene(gameSceneName);
+    }
+
+    private void OnBridgeCountdownTick(CountdownTickPayload data)
+    {
+        if (txtCountdown != null)
+            txtCountdown.text = string.Format(LocalizationManager.Get("starting_in"), data.secondsRemaining);
+    }
+
+    private void OnBridgeDisconnected()
     {
         _currentStatus = LobbyStatus.Disconnected;
         txtStatus.text = LocalizationManager.Get("disconnected");
@@ -296,33 +351,29 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     // ==================== BUTTON HANDLERS ====================
 
     private void OnCreateClicked()
-{
-    PlayClick();
+    {
+        PlayClick();
+        if (panelCreateChoice != null)
+            panelCreateChoice.SetActive(true);
+    }
 
-    // Seçenek panelini göster
-    if (panelCreateChoice != null)
-        panelCreateChoice.SetActive(true);
-}
-
-    // ✅ Enhancement 1: Host manual start game button
     private void OnStartGameClicked()
     {
         PlayClick();
 
-        if (!PhotonNetwork.IsMasterClient)
+        if (!_bridge.IsHost)
         {
             Debug.LogWarning("[OnStartGameClicked] Only host can start game!");
             return;
         }
 
-        int playerCount = PhotonNetwork.CurrentRoom.PlayerCount;
+        int playerCount = _bridge.PlayerCount;
         if (playerCount < minPlayersToStart)
         {
             Debug.LogWarning($"[OnStartGameClicked] Need {minPlayersToStart} players, have {playerCount}");
             return;
         }
 
-        // Stop countdown coroutine to prevent race condition
         if (_countdownCoroutine != null)
         {
             StopCoroutine(_countdownCoroutine);
@@ -330,15 +381,14 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         }
 
         Debug.Log("[OnStartGameClicked] Host manually starting game!");
-        StartGame();
+        _bridge.StartGame();
     }
 
     private void OnSpectateClicked()
     {
         PlayClick();
         _localIsSpectating = !_localIsSpectating;
-        PhotonNetwork.LocalPlayer.SetCustomProperties(
-            new ExitGames.Client.Photon.Hashtable { { "spec", _localIsSpectating } });
+        _bridge.SetSpectator(_localIsSpectating);
         UpdateSpectateButton();
         Debug.Log($"[LobbyManager] Spectate toggled: {_localIsSpectating}");
     }
@@ -354,36 +404,34 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     }
 
     private void OnJoinClicked()
-{
-    PlayClick();
-
-    string code = inputRoomCode != null ? inputRoomCode.text.Trim() : "";
-
-    if (string.IsNullOrEmpty(code))
     {
-        // ✅ Kod yoksa: public odaları ara
-        _currentStatus = LobbyStatus.Searching;
-        txtStatus.text = LocalizationManager.Get("searching");
-        if (btnCreate != null) btnCreate.interactable = false;
-        if (btnJoin != null) btnJoin.interactable = false;
-        PhotonNetwork.JoinRandomRoom();
+        PlayClick();
+
+        string code = inputRoomCode != null ? inputRoomCode.text.Trim() : "";
+
+        if (string.IsNullOrEmpty(code))
+        {
+            _currentStatus = LobbyStatus.Searching;
+            txtStatus.text = LocalizationManager.Get("searching");
+            if (btnCreate != null) btnCreate.interactable = false;
+            if (btnJoin != null) btnJoin.interactable = false;
+            _bridge.JoinRandom();
+        }
+        else
+        {
+            JoinRoomByCode(code);
+        }
     }
-    else
-    {
-        // ✅ Kod varsa: o odaya katıl
-        JoinRoomByCode(code);
-    }
-}
 
     private void OnBackClicked()
     {
         PlayClick();
 
-        if (PhotonNetwork.InRoom)
-            PhotonNetwork.LeaveRoom();
+        if (_bridge != null && _bridge.IsInRoom)
+            _bridge.LeaveRoom(true);
 
-        if (PhotonNetwork.IsConnected)
-            PhotonNetwork.Disconnect();
+        if (_bridge != null)
+            _bridge.Disconnect();
 
         SceneManager.LoadScene("MainMenu");
     }
@@ -397,14 +445,12 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         string shareUrl = $"https://AktasFurkann.github.io/rollmateslink/?code={_currentRoomCode}";
         string message = $"Rollmates'te benimle oyna! Odama katıl: {shareUrl}";
 
-        // Tüm platformlarda panoya kopyala
         GUIUtility.systemCopyBuffer = shareUrl;
         _currentStatus = LobbyStatus.InviteCopied;
         txtStatus.text = LocalizationManager.Get("invite_copied");
         StartCoroutine(ResetStatusAfterDelay(2f));
 
 #if !UNITY_EDITOR
-        // Android'de WhatsApp'ı da açmayı dene
         string encoded = UnityEngine.Networking.UnityWebRequest.EscapeURL(message);
         Application.OpenURL($"whatsapp://send?text={encoded}");
 #endif
@@ -425,48 +471,28 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
     private void OnDeepLinkReceived(string code)
     {
-        if (!PhotonNetwork.InLobby) return;
+        if (_bridge == null || !_bridge.IsConnected) return;
         CheckAndConsumeDeepLink();
     }
 
     // ==================== GAME LOGIC ====================
 
     private void CreateRoom(bool isPrivate)
-{
-    if (btnCreate != null) btnCreate.interactable = false;
-    if (btnJoin != null) btnJoin.interactable = false;
-
-    string roomCode = Random.Range(100000, 999999).ToString();
-
-    var opts = new RoomOptions
     {
-        MaxPlayers = maxPlayers,
-        IsVisible = !isPrivate,  // ✅ Public: görünür, Private: gizli
-        IsOpen = true,
-        PlayerTtl = 60000  // 60 saniye yeniden bağlanma penceresi
-    };
-
-    PhotonNetwork.CreateRoom(roomCode, opts, TypedLobby.Default);
-}
-
-    private void JoinRoom()
-    {
-        _currentStatus = LobbyStatus.Searching;
-        txtStatus.text = LocalizationManager.Get("searching");
         if (btnCreate != null) btnCreate.interactable = false;
         if (btnJoin != null) btnJoin.interactable = false;
 
-        PhotonNetwork.JoinRandomRoom();
+        _bridge.CreateRoom(isPrivate);
     }
 
     private void JoinRoomByCode(string roomCode)
-{
-    txtStatus.text = $"Oda aranıyor: {roomCode}";
-    if (btnCreate != null) btnCreate.interactable = false;
-    if (btnJoin != null) btnJoin.interactable = false;
+    {
+        txtStatus.text = $"Oda aranıyor: {roomCode}";
+        if (btnCreate != null) btnCreate.interactable = false;
+        if (btnJoin != null) btnJoin.interactable = false;
 
-    PhotonNetwork.JoinRoom(roomCode);
-}
+        _bridge.JoinRoom(roomCode);
+    }
 
     private IEnumerator CountdownAndStart()
     {
@@ -474,8 +500,6 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
         while (timeRemaining > 0)
         {
-            int playerCount = PhotonNetwork.CurrentRoom.PlayerCount;
-
             if (txtCountdown != null)
                 txtCountdown.text = string.Format(LocalizationManager.Get("starting_in"), Mathf.CeilToInt(timeRemaining));
 
@@ -485,11 +509,11 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
             timeRemaining -= 1f;
         }
 
-        int finalPlayerCount = PhotonNetwork.CurrentRoom.PlayerCount;
+        int finalPlayerCount = _bridge.PlayerCount;
 
         if (finalPlayerCount >= minPlayersToStart)
         {
-            StartGame();
+            _bridge.StartGame();
         }
         else
         {
@@ -504,49 +528,25 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         }
     }
 
-    private void StartGame()
-    {
-        if (PhotonNetwork.IsMasterClient && PhotonNetwork.InRoom)
-        {
-            _currentStatus = LobbyStatus.LoadingGame;
-            txtStatus.text = LocalizationManager.Get("loading_game");
-
-            // Odayı spectator'lara aç (oyuncu sayısı * 2 slot)
-            PhotonNetwork.CurrentRoom.MaxPlayers = (byte)(maxPlayers * 2);
-            PhotonNetwork.CurrentRoom.IsOpen = true;
-            PhotonNetwork.CurrentRoom.IsVisible = false;
-
-            // Spectator tespiti için room property'leri kaydet
-            var gameProps = new ExitGames.Client.Photon.Hashtable
-            {
-                { "gs", true },
-                { "ipc", (int)PhotonNetwork.CurrentRoom.PlayerCount }
-            };
-            PhotonNetwork.CurrentRoom.SetCustomProperties(gameProps);
-
-            PhotonNetwork.LoadLevel(gameSceneName);
-        }
-    }
-
     // ==================== UI HELPERS ====================
 
     private void UpdatePlayerList()
     {
-        if (!PhotonNetwork.InRoom) return;
+        if (_bridge == null || !_bridge.IsInRoom) return;
 
-        int playerCount = PhotonNetwork.CurrentRoom.PlayerCount;
+        int playerCount = _bridge.PlayerCount;
 
         if (txtPlayerCount != null)
             txtPlayerCount.text = $"{playerCount} / {maxPlayers}";
 
-        // Tüm slotları gizle
         HideAllPlayerSlots();
 
-        // Aktif oyuncuları göster
+        var players = _bridge.GetPlayers();
         int index = 0;
-        foreach (var player in PhotonNetwork.CurrentRoom.Players)
+        foreach (var player in players)
         {
             if (index >= 4) break;
+            if (player.isSpectator) continue;
 
             if (playerSlotObjects != null && index < playerSlotObjects.Length)
                 playerSlotObjects[index].SetActive(true);
@@ -556,19 +556,18 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
 
             if (playerSlotNames != null && index < playerSlotNames.Length)
             {
-                string playerName = player.Value.NickName;
+                string playerName = player.nickname;
                 if (string.IsNullOrEmpty(playerName))
                     playerName = $"Oyuncu {index + 1}";
 
-                string suffix = player.Value.IsMasterClient ? " (Host)" : "";
+                string suffix = player.isHost ? " (Host)" : "";
                 playerSlotNames[index].text = $"{LocalizationManager.GetColorName(index)}: {playerName}{suffix}";
             }
 
             index++;
         }
 
-        // ✅ Enhancement 1: Update start button state based on player count
-        if (btnStartGame != null && PhotonNetwork.IsMasterClient)
+        if (btnStartGame != null && _bridge.IsHost)
         {
             btnStartGame.interactable = playerCount >= minPlayersToStart;
         }
@@ -595,7 +594,7 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
     {
         yield return new WaitForSeconds(delay);
 
-        if (PhotonNetwork.InRoom)
+        if (_bridge != null && _bridge.IsInRoom)
         {
             _currentStatus = LobbyStatus.WaitingForPlayers;
             txtStatus.text = LocalizationManager.Get("waiting_for_players");
@@ -607,23 +606,24 @@ btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         if (sfxSource != null && clickSound != null)
             sfxSource.PlayOneShot(clickSound);
     }
+
     private void OnPublicClicked()
-{
-    PlayClick();
-    if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
-    CreateRoom(isPrivate: false);
-}
+    {
+        PlayClick();
+        if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
+        CreateRoom(isPrivate: false);
+    }
 
-private void OnPrivateClicked()
-{
-    PlayClick();
-    if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
-    CreateRoom(isPrivate: true);
-}
+    private void OnPrivateClicked()
+    {
+        PlayClick();
+        if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
+        CreateRoom(isPrivate: true);
+    }
 
-private void OnCancelChoiceClicked()
-{
-    PlayClick();
-    if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
-}
+    private void OnCancelChoiceClicked()
+    {
+        PlayClick();
+        if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
+    }
 }

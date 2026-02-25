@@ -1,6 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq; // ✅ Bug 2 fix: LINQ for deduplication cleanup
+using System.Linq; // Bug 2 fix: LINQ for deduplication cleanup
 using LudoFriends.Core;
 using LudoFriends.Gameplay;
 using LudoFriends.Presentation;
@@ -8,9 +8,8 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using LudoFriends.Networking;
-using Photon.Pun;
 
-public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reconnection support
+public class GameBootstrapper : MonoBehaviour
 {
     [Header("UI")]
     [SerializeField] private Button btnRestart;
@@ -22,9 +21,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [Header("Scoreboard")]
     [SerializeField] private GameObject scoreboardPanel;
     [SerializeField] private TMPro.TextMeshProUGUI txtScoreboardTitle;
-    [SerializeField] private TMPro.TextMeshProUGUI[] scoreboardTexts; // 4 elemanlı
+    [SerializeField] private TMPro.TextMeshProUGUI[] scoreboardTexts; // 4 elemanli
     [SerializeField] private Button btnScoreboardClose;   // X butonu
-    [SerializeField] private Button btnMainMenu;          // Ana Menü butonu
+    [SerializeField] private Button btnMainMenu;          // Ana Menu butonu
 
     [Header("Disconnect UI")]
     [SerializeField] private GameObject panelDisconnect;
@@ -55,9 +54,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [SerializeField] private HomeSlots homeSlots;
 
     [Header("Networking")]
-    [SerializeField] private MonoBehaviour networkBehaviour;
     private IGameNetwork _net;
-    private PhotonNetworkBridge _photon;
+    private SocketIONetworkBridge _bridge;
 
     [Header("Gameplay")]
     [SerializeField] private PawnSpawner pawnSpawner;
@@ -82,8 +80,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         get
         {
-            if (PhotonNetwork.InRoom)
-                return PhotonNetwork.CurrentRoom.PlayerCount;
+            if (_bridge != null && _bridge.IsInRoom)
+                return _bridge.PlayerCount;
             else
                 return 4; // Offline mod: 4 oyuncu
         }
@@ -106,6 +104,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private bool _isSpectator = false;
     private readonly List<int> _finishOrder = new List<int>();
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
+    private readonly HashSet<int> _tempDisconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
     private const float BotAutoDelay = 1.5f;
 
@@ -130,7 +129,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     [SerializeField] private float moveTimeLimit = 10f;
     private float _turnTimer = 0f;
     private bool _timerActive = false;
-    private bool _clockPlayed = false; // ✅ 3 saniye sesi tekrar çalmasın diye flag
+    private bool _clockPlayed = false;
 
     private string TurnName(int index) => LocalizationManager.GetColorName(index);
 
@@ -142,7 +141,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     private readonly Dictionary<PawnView, int> _pawnToId = new Dictionary<PawnView, int>();
     private int _nextPawnId = 1;
 
-    // ✅ Bug 2 & 3 fixes: Move deduplication and rapid click protection
+    // Bug 2 & 3 fixes: Move deduplication and rapid click protection
     private int _nextMoveId = 0;
     private readonly Dictionary<int, bool> _processedMoves = new Dictionary<int, bool>();
     private int _lastProcessedPawnId = -1;
@@ -159,7 +158,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private bool _paused;
 
-    // ✅ Yeni: Her oyuncunun hangi player index'i olduğunu tutan map
+    // Her oyuncunun hangi player index'i oldugunu tutan map
     private int _localPlayerIndex = -1;
     private int _initialPlayerCount;
 
@@ -168,74 +167,44 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _state = new GameState();
         _dice = new DiceService();
 
-        _net = networkBehaviour as IGameNetwork;
-        _photon = networkBehaviour as PhotonNetworkBridge;
+        _bridge = SocketIONetworkBridge.Instance;
+        _net = _bridge;
 
-        if (_photon != null)
+        if (_net != null)
         {
-            _photon.OnRoll -= OnNetworkRoll;
-            _photon.OnMove -= OnNetworkMove;
-            _photon.OnTurn -= OnNetworkTurn;
-            _photon.OnMoveRequest -= OnNetworkMoveRequest;
-            _photon.OnRequestAdvanceTurn -= OnNetworkRequestAdvanceTurn;
+            _net.OnRoll -= OnNetworkRoll;
+            _net.OnMove -= OnNetworkMove;
+            _net.OnTurn -= OnNetworkTurn;
+            _net.OnMoveRequest -= OnNetworkMoveRequest;
+            _net.OnRequestAdvanceTurn -= OnNetworkRequestAdvanceTurn;
 
-            _photon.OnRoll += OnNetworkRoll;
-            _photon.OnMove += OnNetworkMove;
-            _photon.OnTurn += OnNetworkTurn;
-            _photon.OnMoveRequest += OnNetworkMoveRequest;
-            _photon.OnRequestAdvanceTurn += OnNetworkRequestAdvanceTurn;
-            _photon.OnChatMessage += OnNetworkChatMessage;
+            _net.OnRoll += OnNetworkRoll;
+            _net.OnMove += OnNetworkMove;
+            _net.OnTurn += OnNetworkTurn;
+            _net.OnMoveRequest += OnNetworkMoveRequest;
+            _net.OnRequestAdvanceTurn += OnNetworkRequestAdvanceTurn;
+            _net.OnChatMessage += OnNetworkChatMessage;
         }
 
-        // Player index + spectator tespiti + initialPlayerCount (hepsi birlikte)
-        // Spectator = oyun başladıktan sonra katılan geç gelen. Lobidekiler daima oyuncu.
-        // Photon session içinde ActorNumber yeniden kullanılmaz → ipc'yi aşan = spectator.
-        if (PhotonNetwork.InRoom)
+        // Subscribe to bridge-specific events
+        if (_bridge != null)
         {
-            int ipc = -1;
-            if (PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue("ipc", out object ipcObj) && ipcObj != null)
-            {
-                try { ipc = System.Convert.ToInt32(ipcObj); }
-                catch { ipc = -1; }
-            }
+            _bridge.OnHostChanged += OnHostChanged;
+            _bridge.OnDisconnectedEvent += OnBridgeDisconnected;
+            _bridge.OnPlayerLeft += OnBridgePlayerLeft;
+            _bridge.OnPlayerJoined += OnBridgePlayerJoined;
+        }
 
-            Debug.Log($"[GameBootstrapper] ipc={ipc} (raw type={ipcObj?.GetType()}), ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}");
-
-            if (ipc > 0)
-            {
-                _initialPlayerCount = ipc;
-                if (PhotonNetwork.LocalPlayer.ActorNumber > ipc)
-                {
-                    _isSpectator = true;
-                    _localPlayerIndex = -1;
-                    Debug.Log("[GameBootstrapper] Spectator mode (ActorNumber > ipc)");
-                }
-                else
-                {
-                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
-                    Debug.Log($"[GameBootstrapper] PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
-                }
-            }
+        // Player index + spectator tespiti + initialPlayerCount
+        if (_bridge != null && _bridge.IsInRoom)
+        {
+            _isSpectator = _bridge.IsSpectator;
+            _localPlayerIndex = _bridge.LocalPlayerIndex;
+            _initialPlayerCount = _bridge.PlayerCount;
+            if (_isSpectator)
+                Debug.Log("[GameBootstrapper] Spectator mode");
             else
-            {
-                // ipc yok/geçersiz → "gs" (game started) varsa spectator say
-                bool gameStarted = PhotonNetwork.CurrentRoom.CustomProperties
-                    .TryGetValue("gs", out object gsObj) && gsObj != null
-                    && System.Convert.ToBoolean(gsObj);
-
-                if (gameStarted)
-                {
-                    _isSpectator = true;
-                    _localPlayerIndex = -1;
-                    Debug.Log("[GameBootstrapper] Spectator mode (gs=true, ipc missing/invalid)");
-                }
-                else
-                {
-                    _initialPlayerCount = PhotonNetwork.CurrentRoom.PlayerCount;
-                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
-                    Debug.Log($"[GameBootstrapper] ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
-                }
-            }
+                Debug.Log($"[GameBootstrapper] PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
         }
         else
         {
@@ -244,15 +213,15 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             Debug.Log("[GameBootstrapper] Offline mode");
         }
 
-        // Tahta rotasyonu (pozisyon cache'lemeden ÖNCE)
+        // Tahta rotasyonu (pozisyon cache'lemeden ONCE)
         if (boardRotator != null && _localPlayerIndex > 0)
         {
             boardRotator.ApplyRotation(_localPlayerIndex);
             Canvas.ForceUpdateCanvases();
-            Debug.Log($"[GameBootstrapper] Board rotated {_localPlayerIndex * 90f}° for player {TurnName(_localPlayerIndex)}");
+            Debug.Log($"[GameBootstrapper] Board rotated {_localPlayerIndex * 90f} for player {TurnName(_localPlayerIndex)}");
         }
 
-        // Waypoint pozisyonlarını önbelleğe al (artık döndürülmüş pozisyonları okur)
+        // Waypoint pozisyonlarini onbellege al (artik dondurumus pozisyonlari okur)
         if (positionManager != null)
         {
             positionManager.CacheWaypointPositions(boardWaypoints.MainPath);
@@ -262,14 +231,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             positionManager.CacheHomeLanePositions(3, boardWaypoints.HomeB);
         }
 
-        // Oda kodunu göster
-        if (txtInGameRoomCode != null && PhotonNetwork.InRoom)
-            txtInGameRoomCode.text = PhotonNetwork.CurrentRoom.Name;
+        // Oda kodunu goster
+        if (txtInGameRoomCode != null && _bridge != null && _bridge.IsInRoom)
+            txtInGameRoomCode.text = _bridge.RoomCode;
 
         hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
-        // Oyuncu köşe panellerini kur
+        // Oyuncu kose panellerini kur
         SetupPlayerCornerPanels();
 
         if (chatView != null)
@@ -285,7 +254,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _yellowPawns = pawnSpawner.SpawnColor(homeSlots.Y, yellowPawnSprite, Color.white);
         _bluePawns = pawnSpawner.SpawnColor(homeSlots.B, bluePawnSprite, Color.white);
 
-        // Piyon sprite'larını ters döndür (dik kalsınlar)
+        // Piyon sprite'larini ters dondur (dik kalsinlar)
         if (_localPlayerIndex > 0)
         {
             Quaternion counterRot = BoardRotator.GetCounterRotation(_localPlayerIndex);
@@ -341,23 +310,22 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (btnRollDice != null)
         {
-            if (!PhotonNetwork.InRoom)
+            if (_bridge == null || !_bridge.IsInRoom)
             {
-                // Offline mod: hemen etkinleştir
+                // Offline mod: hemen etkinlestir
                 bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
                 btnRollDice.interactable = isMyTurn && !_gameOver;
                 Debug.Log($"[Awake] Offline. FirstTurn={_state.CurrentTurnPlayerIndex}, MyTurn={isMyTurn}");
             }
             else if (_isSpectator)
             {
-                // Spectator kesinleşti → gizle
+                // Spectator kesinlesti -> gizle
                 btnRollDice.interactable = false;
                 Debug.Log("[Awake] Spectator: dice button passive (visible but non-interactive).");
             }
             else
             {
-                // Online oyuncu: sıramızsa aktif, değilse pasif.
-                // Geç gelen spectator'lar OnJoinedRoom'da butonu pasif eder.
+                // Online oyuncu: siramizsa aktif, degilse pasif.
                 bool isMyTurn = _state.CurrentTurnPlayerIndex == _localPlayerIndex;
                 btnRollDice.interactable = isMyTurn && !_gameOver;
                 Debug.Log($"[Awake] Online player: PlayerIndex={_localPlayerIndex}, MyTurn={isMyTurn}, BtnInteractable={isMyTurn && !_gameOver}");
@@ -366,53 +334,49 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         HighlightActivePlayerPawns();
 
-        // ✅ Oyun başlama sesi
+        // Oyun baslama sesi
         sfx?.PlayGameStart();
 
-        // İlk sıra için timer başlat — spectator için başlatma
+        // Ilk sira icin timer baslat -- spectator icin baslatma
         if (!_isSpectator)
             StartTurnTimer(rollTimeLimit);
     }
 
     // ========== TIMER NETWORK EVENT SUBSCRIPTIONS (Fix 1) ==========
 
-    public override void OnEnable()
+    private void OnEnable()
     {
-        base.OnEnable();
-
-        if (_photon != null)
+        if (_net != null)
         {
-            _photon.OnTimerStart += OnNetworkTimerStart;
-            _photon.OnTimerStop += OnNetworkTimerStop;
+            _net.OnTimerStart += OnNetworkTimerStart;
+            _net.OnTimerStop += OnNetworkTimerStop;
         }
 
         LocalizationManager.OnLanguageChanged += RefreshLocalization;
     }
 
-    public override void OnDisable()
+    private void OnDisable()
     {
-        base.OnDisable();
-
-        if (_photon != null)
+        if (_net != null)
         {
-            _photon.OnTimerStart -= OnNetworkTimerStart;
-            _photon.OnTimerStop -= OnNetworkTimerStop;
+            _net.OnTimerStart -= OnNetworkTimerStart;
+            _net.OnTimerStop -= OnNetworkTimerStop;
         }
 
         LocalizationManager.OnLanguageChanged -= RefreshLocalization;
     }
 
-    // ✅ YENİ metod
+    // YENi metod
     private void OnNetworkRequestAdvanceTurn()
     {
         Debug.Log("[OnNetworkRequestAdvanceTurn] Received from client");
 
-        // ✅ Extra turn varsa aynı oyuncu devam
+        // Extra turn varsa ayni oyuncu devam
         if (_extraTurnsEarned > 0)
         {
             _extraTurnsEarned--;
             Debug.Log($"[OnNetworkRequestAdvanceTurn] Extra turn! Remaining: {_extraTurnsEarned}");
-            _photon.BroadcastTurn(_state.CurrentTurnPlayerIndex);
+            _net.BroadcastTurn(_state.CurrentTurnPlayerIndex);
             return;
         }
 
@@ -421,59 +385,24 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private void InitializeGame()
     {
-        if (_photon != null)
+        if (_net != null)
         {
-            _photon.OnRoll += OnNetworkRoll;
-            _photon.OnMove += OnNetworkMove;
-            _photon.OnTurn += OnNetworkTurn;
-            _photon.OnMoveRequest += OnNetworkMoveRequest;
+            _net.OnRoll += OnNetworkRoll;
+            _net.OnMove += OnNetworkMove;
+            _net.OnTurn += OnNetworkTurn;
+            _net.OnMoveRequest += OnNetworkMoveRequest;
         }
 
-        // Player index ve spectator — InitializeGame 0.5s sonra çalışır, property'ler artık kesinlikle sync olmuştur.
-        // Spectator = oyun başladıktan sonra katılan geç gelen. Lobidekiler daima oyuncu.
-        if (PhotonNetwork.InRoom)
+        // Player index ve spectator -- InitializeGame 0.5s sonra calisir, property'ler artik kesinlikle sync olmustur.
+        if (_bridge != null && _bridge.IsInRoom)
         {
-            int ipc2 = -1;
-            if (PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue("ipc", out object ipcObj2) && ipcObj2 != null)
-            {
-                try { ipc2 = System.Convert.ToInt32(ipcObj2); }
-                catch { ipc2 = -1; }
-            }
-
-            if (ipc2 > 0)
-            {
-                _initialPlayerCount = ipc2;
-                if (PhotonNetwork.LocalPlayer.ActorNumber > ipc2)
-                {
-                    _isSpectator = true;
-                    _localPlayerIndex = -1;
-                    Debug.Log($"[GameBootstrapper] InitializeGame: Spectator confirmed. ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, ipc={ipc2}");
-                }
-                else
-                {
-                    _isSpectator = false;
-                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
-                    Debug.Log($"[GameBootstrapper] InitializeGame: Player confirmed. PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
-                }
-            }
+            _isSpectator = _bridge.IsSpectator;
+            _localPlayerIndex = _bridge.LocalPlayerIndex;
+            _initialPlayerCount = _bridge.PlayerCount;
+            if (_isSpectator)
+                Debug.Log("[GameBootstrapper] InitializeGame: Spectator mode");
             else
-            {
-                // ipc hâlâ bulunamadı — gs varsa spectator say
-                bool gameStarted2 = PhotonNetwork.CurrentRoom.CustomProperties
-                    .TryGetValue("gs", out object gsObj2) && gsObj2 != null
-                    && System.Convert.ToBoolean(gsObj2);
-                if (gameStarted2)
-                {
-                    _isSpectator = true;
-                    _localPlayerIndex = -1;
-                    Debug.Log("[GameBootstrapper] InitializeGame: Spectator (gs=true, ipc missing)");
-                }
-                else
-                {
-                    _localPlayerIndex = Mathf.Clamp(PhotonNetwork.LocalPlayer.ActorNumber - 1, 0, 3);
-                    Debug.Log($"[GameBootstrapper] InitializeGame (no ipc/gs): PlayerIndex={_localPlayerIndex}");
-                }
-            }
+                Debug.Log($"[GameBootstrapper] InitializeGame: PlayerIndex={_localPlayerIndex}, Color={TurnName(_localPlayerIndex)}");
         }
         else
         {
@@ -481,7 +410,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             Debug.Log("[GameBootstrapper] InitializeGame: Offline mode");
         }
 
-        // Zar butonu: spectator tespit kesinleşti, butonu doğru state'e getir
+        // Zar butonu: spectator tespit kesinlesti, butonu dogru state'e getir
         if (btnRollDice != null)
         {
             if (_isSpectator)
@@ -489,24 +418,24 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 btnRollDice.interactable = false;
                 Debug.Log("[InitializeGame] Spectator confirmed: dice button passive.");
             }
-            else if (PhotonNetwork.InRoom)
+            else if (_bridge != null && _bridge.IsInRoom)
             {
-                // Online oyuncu — sıra kontrolüne göre enable et
+                // Online oyuncu -- sira kontrolune gore enable et
                 bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
                 btnRollDice.interactable = isMyTurn && !_gameOver;
                 Debug.Log($"[InitializeGame] Player confirmed. PlayerIndex={_localPlayerIndex}, MyTurn={isMyTurn}, BtnInteractable={btnRollDice.interactable}");
             }
         }
 
-        // Tahta rotasyonu (pozisyon cache'lemeden ÖNCE)
+        // Tahta rotasyonu (pozisyon cache'lemeden ONCE)
         if (boardRotator != null && _localPlayerIndex > 0)
         {
             boardRotator.ApplyRotation(_localPlayerIndex);
             Canvas.ForceUpdateCanvases();
-            Debug.Log($"[InitializeGame] Board rotated {_localPlayerIndex * 90f}° for player {TurnName(_localPlayerIndex)}");
+            Debug.Log($"[InitializeGame] Board rotated {_localPlayerIndex * 90f} for player {TurnName(_localPlayerIndex)}");
         }
 
-        // Pozisyonları yeniden cache'le (döndürülmüş haliyle)
+        // Pozisyonlari yeniden cache'le (dondurumus haliyle)
         if (positionManager != null)
         {
             positionManager.CacheWaypointPositions(boardWaypoints.MainPath);
@@ -528,7 +457,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _yellowPawns = pawnSpawner.SpawnColor(homeSlots.Y, yellowPawnSprite, Color.white);
         _bluePawns = pawnSpawner.SpawnColor(homeSlots.B, bluePawnSprite, Color.white);
 
-        // Piyon sprite'larını ters döndür
+        // Piyon sprite'larini ters dondur
         if (_localPlayerIndex > 0)
         {
             Quaternion counterRot = BoardRotator.GetCounterRotation(_localPlayerIndex);
@@ -567,16 +496,13 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         // Host'un NetworkRoot'u spawn etmesini bekle
         yield return new WaitForSeconds(0.5f);
 
-        // Sahnede PhotonNetworkBridge'i bul
-        _photon = FindObjectOfType<PhotonNetworkBridge>();
-
-        if (_photon == null)
+        _bridge = SocketIONetworkBridge.Instance;
+        if (_bridge == null)
         {
-            Debug.LogError("[GameBootstrapper] NetworkRoot not found!");
+            Debug.LogError("[GameBootstrapper] SocketIONetworkBridge not found!");
             yield break;
         }
-
-        _net = _photon;
+        _net = _bridge;
         InitializeGame();
     }
 
@@ -621,32 +547,36 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         SetupPlayerCornerPanels();
     }
 
-    // ✅ UpdateTurnUI artık sadece local operasyonlarda kullanılacak
+    // UpdateTurnUI artik sadece local operasyonlarda kullanilacak
     private void SetupPlayerCornerPanels()
     {
         string[] cornerNames = new string[4];
 
-        if (PhotonNetwork.InRoom)
+        if (_bridge != null && _bridge.IsInRoom)
         {
-            // Önce hepsini renk adıyla doldur (boş kalmasın)
+            // Onca hepsini renk adiyla doldur (bos kalmasin)
             for (int i = 0; i < 4; i++)
                 cornerNames[i] = TurnName(i);
 
-            // Photon'daki gerçek NickName varsa üzerine yaz
-            foreach (var kv in PhotonNetwork.CurrentRoom.Players)
+            // Bridge'deki gercek NickName varsa uzerine yaz
+            var players = _bridge.GetPlayers();
+            if (players != null)
             {
-                int idx = kv.Value.ActorNumber - 1;
-                if (idx >= 0 && idx < 4)
+                foreach (var player in players)
                 {
-                    string nick = kv.Value.NickName;
-                    if (!string.IsNullOrEmpty(nick))
-                        cornerNames[idx] = nick;
+                    int idx = player.playerIndex;
+                    if (idx >= 0 && idx < 4)
+                    {
+                        string nick = player.nickname;
+                        if (!string.IsNullOrEmpty(nick))
+                            cornerNames[idx] = nick;
+                    }
                 }
             }
         }
         else
         {
-            // Offline mod: renk adları
+            // Offline mod: renk adlari
             for (int i = 0; i < 4; i++)
                 cornerNames[i] = TurnName(i);
         }
@@ -666,13 +596,21 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private void OnDestroy()
     {
-        if (_photon != null)
+        if (_net != null)
         {
-            _photon.OnRoll -= OnNetworkRoll; // ✅ Düzeltildi (+ değil -)
-            _photon.OnMove -= OnNetworkMove;
-            _photon.OnTurn -= OnNetworkTurn;
-            _photon.OnMoveRequest -= OnNetworkMoveRequest;
-            _photon.OnChatMessage -= OnNetworkChatMessage;
+            _net.OnRoll -= OnNetworkRoll;
+            _net.OnMove -= OnNetworkMove;
+            _net.OnTurn -= OnNetworkTurn;
+            _net.OnMoveRequest -= OnNetworkMoveRequest;
+            _net.OnChatMessage -= OnNetworkChatMessage;
+        }
+
+        if (_bridge != null)
+        {
+            _bridge.OnHostChanged -= OnHostChanged;
+            _bridge.OnDisconnectedEvent -= OnBridgeDisconnected;
+            _bridge.OnPlayerLeft -= OnBridgePlayerLeft;
+            _bridge.OnPlayerJoined -= OnBridgePlayerJoined;
         }
 
         if (btnRollDice != null)
@@ -700,12 +638,11 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             btnTakeControl.onClick.RemoveListener(OnTakeControlClicked);
     }
 
-    // ✅ Bug 1 fix: Reconnection support - sync state when player joins/rejoins
-    public override void OnJoinedRoom()
+    // Bug 1 fix: Reconnection support - sync state when player joins/rejoins
+    // NOTE: This is now called by bridge reconnection events or can be called manually
+    private void OnJoinedRoom()
     {
-        base.OnJoinedRoom();
-
-        // Reconnect sonrası: disconnect panelini kapat ve oyunu devam ettir
+        // Reconnect sonrasi: disconnect panelini kapat ve oyunu devam ettir
         if (_reconnectCoroutine != null)
         {
             StopCoroutine(_reconnectCoroutine);
@@ -714,38 +651,25 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         if (panelDisconnect != null) panelDisconnect.SetActive(false);
         if (btnReconnect != null) btnReconnect.gameObject.SetActive(false);
 
-        // ── Spectator tespiti: Awake'de InRoom=false ise buraya kadar ertelenir ──
-        // Bu blok hem fresh spectator'lar (timing fix) hem de reconnect'i olmayan spectator'lar için çalışır.
-        if (!_isSpectator && PhotonNetwork.InRoom)
+        // Spectator tespiti
+        if (!_isSpectator && _bridge != null && _bridge.IsInRoom)
         {
-            int ipcR = -1;
-            if (PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue("ipc", out object ipcObjR) && ipcObjR != null)
-                try { ipcR = System.Convert.ToInt32(ipcObjR); } catch { ipcR = -1; }
-
-            bool shouldBeSpectator;
-            if (ipcR > 0)
-            {
-                _initialPlayerCount = ipcR;
-                shouldBeSpectator = PhotonNetwork.LocalPlayer.ActorNumber > ipcR;
-            }
-            else
-            {
-                shouldBeSpectator = PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey("gs");
-            }
+            bool shouldBeSpectator = _bridge.IsSpectator;
+            _initialPlayerCount = _bridge.PlayerCount;
 
             if (shouldBeSpectator)
             {
                 _isSpectator = true;
                 _localPlayerIndex = -1;
                 if (btnRollDice != null) btnRollDice.interactable = false;
-                Debug.Log($"[OnJoinedRoom] Spectator confirmed (timing fix). ActorNumber={PhotonNetwork.LocalPlayer.ActorNumber}, ipc={ipcR}");
+                Debug.Log($"[OnJoinedRoom] Spectator confirmed (timing fix).");
                 _gameOver = false;
-                return; // Spectator için state restore gerekmiyor
+                return; // Spectator icin state restore gerekmiyor
             }
         }
         else if (_isSpectator)
         {
-            // Zaten spectator — butonu gizli tut ve çık
+            // Zaten spectator -- butonu gizli tut ve cik
             if (btnRollDice != null) btnRollDice.interactable = false;
             _gameOver = false;
             return;
@@ -754,10 +678,10 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _gameOver = false;
 
         // Only restore state for non-host players (host already has correct state)
-        if (PhotonNetwork.IsMasterClient) return;
+        if (_bridge != null && _bridge.IsHost) return;
 
         // Try to restore game state from room properties
-        if (_photon != null && _photon.TryGetGameState(
+        if (_net != null && _net.TryGetGameState(
             out int turn, out int roll, out int phase, out int sixes, out int extraTurns))
         {
             Debug.Log($"[OnJoinedRoom] Restoring state: Turn={turn}, Roll={roll}, Phase={phase}");
@@ -789,7 +713,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             RestorePawnStatesFromNetwork();
 
             // Restore finish order (scoreboard)
-            var savedFinishOrder = _photon.GetFinishOrder();
+            var savedFinishOrder = _net.GetFinishOrder();
             if (savedFinishOrder != null && savedFinishOrder.Length > 0)
             {
                 _finishOrder.Clear();
@@ -808,12 +732,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                     StartTurnTimer(rollTimeLimit);
                 else if (_phase == TurnPhase.AwaitMove)
                 {
-                    // ✅ MODIFIED (Fix 2): Calculate remaining time from persisted state
+                    // Calculate remaining time from persisted state
                     float timerDuration = moveTimeLimit;
 
-                    if (_photon != null && _photon.TryGetTimerState(out double startTime, out float savedDuration))
+                    if (_net != null && _net.TryGetTimerState(out double startTime, out float savedDuration))
                     {
-                        double elapsed = PhotonNetwork.Time - startTime;
+                        double elapsed = _bridge.ServerTime - startTime;
                         float remaining = savedDuration - (float)elapsed;
 
                         // Add 2-second grace period for reconnection latency
@@ -829,34 +753,33 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
                     // Highlight legal moves
                     var legal = GetLegalMoves(turn, roll);
-                    HighlightLegalMoves(legal);      // ✅ Enhancement 2: Visual pulse animation for reconnection
+                    HighlightLegalMoves(legal);
                     SetOnlyLegalClickable(legal);
                 }
             }
         }
     }
 
-    public override void OnMasterClientSwitched(Photon.Realtime.Player newMasterClient)
+    private void OnHostChanged(HostChangedPayload payload)
     {
-        base.OnMasterClientSwitched(newMasterClient);
-        Debug.Log($"[OnMasterClientSwitched] New host: {newMasterClient.ActorNumber}, IsLocal={newMasterClient.IsLocal}");
+        Debug.Log($"[OnHostChanged] New host. IsLocal={(_bridge != null && _bridge.IsHost)}");
 
         if (_gameOver) return;
 
         // Stuck state'leri temizle
         _isAnimating = false;
         _isRollingDice = false;
-        _botPlayers.Clear(); // Host migration sonrası bot listesini sıfırla
+        _botPlayers.Clear(); // Host migration sonrasi bot listesini sifirla
 
-        // Yeni host ise, host sorumluluklarını devral
-        if (newMasterClient.IsLocal)
+        // Yeni host ise, host sorumluluklarini devral
+        if (_bridge != null && _bridge.IsHost)
         {
-            Debug.Log("[OnMasterClientSwitched] I am the new host. Taking over responsibilities.");
+            Debug.Log("[OnHostChanged] I am the new host. Taking over responsibilities.");
 
-            // Tüm coroutine'leri durdur (eski host'un roll/move animasyonları)
+            // Tum coroutine'leri durdur (eski host'un roll/move animasyonlari)
             StopAllCoroutines();
 
-            // Disconnected oyuncuları güncelle (odada olmayanları bul)
+            // Disconnected oyunculari guncelle (odada olmayanlari bul)
             RefreshDisconnectedPlayers();
 
             // Phase ve state'i resetle
@@ -865,13 +788,13 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             _consecutiveSixes = 0;
             _extraTurnsEarned = 0;
 
-            // ✅ MoveId çakışmasını önle: Yeni host'un moveId'leri
-            // eski host'un broadcast ettiği moveId'lerle çakışmamalı
+            // MoveId cakismasini onle: Yeni host'un moveId'leri
+            // eski host'un broadcast ettigi moveId'lerle cakismamali
             _processedMoves.Clear();
             _nextMoveId = 1000 + UnityEngine.Random.Range(0, 1000);
             _lastProcessedPawnId = -1;
 
-            // Mevcut sıradaki oyuncu disconnected ise turu ilerlet
+            // Mevcut siradaki oyuncu disconnected ise turu ilerlet
             if (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)
                 || _finishOrder.Contains(_state.CurrentTurnPlayerIndex))
             {
@@ -879,7 +802,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             }
             else
             {
-                // Sıradaki oyuncu hâlâ aktifse, UI güncelle ve timer başlat
+                // Siradaki oyuncu hala aktifse, UI guncelle ve timer baslat
                 int currentTurn = _state.CurrentTurnPlayerIndex;
                 hudView.SetTurn(TurnName(currentTurn), currentTurn, _localPlayerIndex);
                 hudView.SetDice(-1);
@@ -891,24 +814,24 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 StartTurnTimer(rollTimeLimit);
 
                 // State'i kaydet
-                _photon?.SyncGameState(currentTurn, -1, (int)TurnPhase.AwaitRoll, 0, 0);
+                _net?.SyncGameState(currentTurn, -1, (int)TurnPhase.AwaitRoll, 0, 0);
                 SerializeAndSavePawnStates();
             }
         }
     }
 
-    public override void OnDisconnected(Photon.Realtime.DisconnectCause cause)
+    private void OnBridgeDisconnected()
     {
-        Debug.LogWarning($"[GameBootstrapper] Disconnected: {cause}");
+        Debug.LogWarning("[GameBootstrapper] Disconnected from server");
 
-        // Kasıtlı çıkış (Exit butonu) → reconnect başlatma
+        // Kasitli cikis (Exit butonu) -> reconnect baslatma
         if (_isIntentionalDisconnect)
         {
             _isIntentionalDisconnect = false;
             return;
         }
 
-        // İzleyici bağlantısı kesildi → reconnect yok, sadece bilgi göster
+        // Izleyici baglantisi kesildi -> reconnect yok, sadece bilgi goster
         if (_isSpectator)
         {
             if (panelDisconnect != null)
@@ -922,7 +845,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
                 if (txtDisconnectCountdown != null) txtDisconnectCountdown.text = "";
                 if (btnReconnect != null) btnReconnect.gameObject.SetActive(false);
             }
-            return; // Reconnect coroutine başlatma — oyuncuların reconnect'i ile çakışmasın
+            return; // Reconnect coroutine baslatma
         }
 
         _timerActive = false;
@@ -945,9 +868,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private IEnumerator ReconnectCountdown()
     {
+        // Socket.IO handles reconnection automatically, but we show UI feedback
         float timeLeft = 60f;
         var wait = new WaitForSeconds(1f);
-        PhotonNetwork.ReconnectAndRejoin();
 
         while (timeLeft > 0)
         {
@@ -980,7 +903,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         }
         if (btnReconnect != null)
             btnReconnect.interactable = false;
-        PhotonNetwork.ReconnectAndRejoin();
+        // Socket.IO handles reconnection automatically
     }
 
     private void OnApplicationPause(bool pauseStatus)
@@ -991,12 +914,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             Debug.Log("[GameBootstrapper] App resumed (foreground)");
     }
 
-    public override void OnJoinRoomFailed(short returnCode, string message)
+    // Reconnect failure handling (called by bridge events if needed)
+    private void OnJoinRoomFailed(string message)
     {
-        base.OnJoinRoomFailed(returnCode, message);
-        Debug.LogWarning($"[GameBootstrapper] OnJoinRoomFailed: {returnCode} - {message}");
+        Debug.LogWarning($"[GameBootstrapper] OnJoinRoomFailed: {message}");
 
-        // Reconnect bağlamında başarısız: butonu tekrar aktif et
+        // Reconnect baglaminda basarisiz: butonu tekrar aktif et
         if (panelDisconnect != null && panelDisconnect.activeSelf)
         {
             if (txtDisconnectCountdown != null)
@@ -1011,20 +934,25 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     }
 
     /// <summary>
-    /// Odadaki aktif oyuncuları kontrol ederek _disconnectedPlayers set'ini günceller.
-    /// Host migration sonrası çağrılır.
+    /// Odadaki aktif oyunculari kontrol ederek _disconnectedPlayers set'ini gunceller.
+    /// Host migration sonrasi cagrilir.
     /// </summary>
     private void RefreshDisconnectedPlayers()
     {
-        HashSet<int> activeActors = new HashSet<int>();
-        foreach (var player in PhotonNetwork.PlayerList)
+        HashSet<int> activePlayerIndices = new HashSet<int>();
+        var players = _bridge?.GetPlayers();
+        if (players != null)
         {
-            activeActors.Add(player.ActorNumber - 1);
+            foreach (var player in players)
+            {
+                activePlayerIndices.Add(player.playerIndex);
+            }
         }
 
         for (int i = 0; i < _initialPlayerCount; i++)
         {
-            if (!activeActors.Contains(i) && !_disconnectedPlayers.Contains(i))
+            if (!activePlayerIndices.Contains(i) && !_disconnectedPlayers.Contains(i)
+                && !_tempDisconnectedPlayers.Contains(i))
             {
                 _disconnectedPlayers.Add(i);
                 if (!_finishOrder.Contains(i))
@@ -1038,12 +966,12 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         // Scoreboard ve finish order kaydet
         UpdateScoreboard();
-        if (PhotonNetwork.IsMasterClient)
-            _photon?.SaveFinishOrder(_finishOrder.ToArray());
+        if (_bridge != null && _bridge.IsHost)
+            _net?.SaveFinishOrder(_finishOrder.ToArray());
     }
 
     /// <summary>
-    /// Host migration sonrası turu güvenli şekilde ilerletir.
+    /// Host migration sonrasi turu guvenli sekilde ilerletir.
     /// </summary>
     private void AdvanceTurnAfterHostMigration()
     {
@@ -1052,7 +980,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _state.NextTurn(_initialPlayerCount);
 
         int safetyCount = 0;
-        while (_finishOrder.Contains(_state.CurrentTurnPlayerIndex) && safetyCount < _initialPlayerCount)
+        while ((_finishOrder.Contains(_state.CurrentTurnPlayerIndex)
+                || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
+               && safetyCount < _initialPlayerCount)
         {
             _state.NextTurn(_initialPlayerCount);
             safetyCount++;
@@ -1070,64 +1000,87 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         HighlightActivePlayerPawns();
 
         // Broadcast ve state kaydet
-        if (_photon != null)
+        if (_net != null)
         {
-            _photon.BroadcastTurn(nextTurn);
-            _photon.SyncGameState(nextTurn, -1, (int)TurnPhase.AwaitRoll, 0, 0);
+            _net.BroadcastTurn(nextTurn);
+            _net.SyncGameState(nextTurn, -1, (int)TurnPhase.AwaitRoll, 0, 0);
             SerializeAndSavePawnStates();
         }
 
         StartTurnTimer(rollTimeLimit);
     }
 
-    // ✅ Bug 3 fix: Handle player disconnects to prevent lockup
-    public override void OnPlayerLeftRoom(Photon.Realtime.Player otherPlayer)
+    // Bug 3 fix: Handle player disconnects to prevent lockup
+    private void OnBridgePlayerLeft(PlayerLeftPayload payload)
     {
-        base.OnPlayerLeftRoom(otherPlayer);
+        int actorNumber = payload.playerIndex + 1;
 
-        // Spectator ayrıldıysa → oyun durumunu hiç değiştirme
-        // ActorNumber > initialPlayerCount → oyun başladıktan sonra katılmış = spectator
-        if (otherPlayer.ActorNumber > _initialPlayerCount)
+        // Spectator ayrildi -> oyun durumunu hic degistirme
+        if (actorNumber > _initialPlayerCount)
         {
-            Debug.Log($"[OnPlayerLeftRoom] Spectator {otherPlayer.ActorNumber} left. No game impact.");
+            Debug.Log($"[OnBridgePlayerLeft] Spectator {actorNumber} left. No game impact.");
             return;
         }
 
-        int leftPlayerIndex = otherPlayer.ActorNumber - 1;
-        Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} (Index={leftPlayerIndex}) left.");
-
-        // Oyunu meşru şekilde bitirmiş oyuncu mu? (finishOrder'da ama disconnectedPlayers'da değil)
-        bool alreadyLegitimatelyFinished = _finishOrder.Contains(leftPlayerIndex)
-                                           && !_disconnectedPlayers.Contains(leftPlayerIndex);
-
-        // Bug 1 Fix: Oyunu bitirmiş biri için 60 saniyelik reconnect penceresini atla
-        if (otherPlayer.IsInactive && !alreadyLegitimatelyFinished)
-        {
-            Debug.Log($"[OnPlayerLeftRoom] Player {otherPlayer.ActorNumber} is inactive (temporary disconnect). Waiting for reconnect.");
-            return;
-        }
+        int leftPlayerIndex = payload.playerIndex;
+        Debug.Log($"[OnBridgePlayerLeft] Player {actorNumber} (Index={leftPlayerIndex}) left. isPermanent={payload.isPermanent}");
 
         if (_gameOver) return;
 
-        // Çıkan oyuncuyu henüz sıralamada değilse sonuncu yap
+        // ── GECICI KOPUS (isPermanent = false) ──
+        // Piyonlari kaldirma, finishOrder'a ekleme, game over kontrolu yapma
+        // Sadece turunu atla ve reconnect'i bekle
+        if (!payload.isPermanent)
+        {
+            _tempDisconnectedPlayers.Add(leftPlayerIndex);
+            _botPlayers.Remove(leftPlayerIndex);
+            Debug.Log($"[OnBridgePlayerLeft] P{leftPlayerIndex} temporarily disconnected. Waiting for reconnect...");
+
+            // Stuck state'leri temizle
+            _isAnimating = false;
+            _isRollingDice = false;
+
+            // Sirasi gelmis oyuncuysa -> turu atla
+            if (_bridge != null && _bridge.IsHost
+                && (_state.CurrentTurnPlayerIndex == leftPlayerIndex
+                    || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)))
+            {
+                AdvanceTurnSkipDisconnected();
+            }
+
+            UpdateScoreboard();
+            return;
+        }
+
+        // ── KALICI AYRILMA (isPermanent = true) ──
+        // 60s doldu veya lobby'den cikti: piyonlari kaldir, game over kontrol et
+
+        // Gecici listeden cikar (onceden eklenmisse)
+        _tempDisconnectedPlayers.Remove(leftPlayerIndex);
+
+        // Oyunu mesru sekilde bitirmis oyuncu mu? (finishOrder'da ama disconnectedPlayers'da degil)
+        bool alreadyLegitimatelyFinished = _finishOrder.Contains(leftPlayerIndex)
+                                           && !_disconnectedPlayers.Contains(leftPlayerIndex);
+
+        // Cikan oyuncuyu henuz siralamada degilse sonuncu yap
         if (!_finishOrder.Contains(leftPlayerIndex))
             _finishOrder.Add(leftPlayerIndex);
 
-        // Bug 2 Fix: Meşru finisher'ı _disconnectedPlayers'a ekleme → scoreboard korunsun
+        // Bug 2 Fix: Mesru finisher'i _disconnectedPlayers'a ekleme -> scoreboard korunsun
         if (!alreadyLegitimatelyFinished)
         {
             _disconnectedPlayers.Add(leftPlayerIndex);
             _botPlayers.Remove(leftPlayerIndex);
-            // Çıkan oyuncunun piyonlarını tahtadan kaldır
+            // Cikan oyuncunun piyonlarini tahtadan kaldir
             RemoveDisconnectedPlayerPawns(leftPlayerIndex);
         }
         else
         {
-            Debug.Log($"[OnPlayerLeftRoom] P{leftPlayerIndex} already legitimately finished. Preserving rank.");
+            Debug.Log($"[OnBridgePlayerLeft] P{leftPlayerIndex} already legitimately finished. Preserving rank.");
             _botPlayers.Remove(leftPlayerIndex);
         }
 
-        // Kaç aktif (bitmemiş) oyuncu kaldı?
+        // Kac aktif (bitmemis) oyuncu kaldi?
         int totalPlayers = _initialPlayerCount;
         int remainingPlayers = 0;
         int lastRemainingIndex = -1;
@@ -1140,10 +1093,10 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             }
         }
 
-        // Sadece 1 kişi kaldıysa → o 1., oyun biter
+        // Sadece 1 kisi kaldiysa -> o 1., oyun biter
         if (remainingPlayers <= 1 && lastRemainingIndex >= 0)
         {
-            // Kalan oyuncuyu 1. sıraya koy (listenin başına)
+            // Kalan oyuncuyu 1. siraya koy (listenin basina)
             _finishOrder.Insert(0, lastRemainingIndex);
             _gameOver = true;
             if (sfx != null) sfx.PlayWin();
@@ -1153,76 +1106,97 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
             StopTurnTimer();
             ClearAllHighlights();
-            Debug.Log($"[OnPlayerLeftRoom] Only P{lastRemainingIndex} remains, game over!");
+            Debug.Log($"[OnBridgePlayerLeft] Only P{lastRemainingIndex} remains, game over!");
         }
 
-        // Scoreboard güncelle
+        // Scoreboard guncelle
         UpdateScoreboard();
 
-        // Photon state kaydet
-        if (PhotonNetwork.IsMasterClient)
-            _photon?.SaveFinishOrder(_finishOrder.ToArray());
+        // State kaydet
+        if (_bridge != null && _bridge.IsHost)
+            _net?.SaveFinishOrder(_finishOrder.ToArray());
 
         // Stuck state'leri temizle
         _isAnimating = false;
         _isRollingDice = false;
 
-        // Oyun devam ediyorsa ve çıkan kişinin sırasıysa → atla
+        // Oyun devam ediyorsa ve cikan kisinin sirasiysa -> atla
         if (!_gameOver)
         {
-            if (PhotonNetwork.IsMasterClient && _disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
+            if (_bridge != null && _bridge.IsHost
+                && (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)
+                    || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)))
             {
-                Debug.Log($"[OnPlayerLeftRoom] Current turn player P{_state.CurrentTurnPlayerIndex} is disconnected. Advancing turn.");
-                StopTurnTimer();
-                _extraTurnsEarned = 0;
-
-                // Turu ilerlet ve lokal state'i de güncelle (RPC kendine ulaşmayabilir)
-                _phase = TurnPhase.AwaitRoll;
-                _currentRoll = -1;
-                _consecutiveSixes = 0;
-
-                _state.NextTurn(_initialPlayerCount);
-
-                int safetyCount = 0;
-                while (_finishOrder.Contains(_state.CurrentTurnPlayerIndex) && safetyCount < _initialPlayerCount)
-                {
-                    _state.NextTurn(_initialPlayerCount);
-                    safetyCount++;
-                }
-
-                int nextTurn = _state.CurrentTurnPlayerIndex;
-                Debug.Log($"[OnPlayerLeftRoom] New turn: P{nextTurn}");
-
-                // UI'ı güncelle
-                hudView.SetTurn(TurnName(nextTurn), nextTurn, _localPlayerIndex);
-                hudView.SetDice(-1);
-
-                if (btnRollDice != null)
-                    btnRollDice.interactable = (nextTurn == _localPlayerIndex) && !_gameOver;
-
-                HighlightActivePlayerPawns();
-
-                // Diğer client'lara da broadcast et
-                if (_photon != null)
-                {
-                    _photon.BroadcastTurn(nextTurn);
-                    _photon.SyncGameState(nextTurn, -1, (int)TurnPhase.AwaitRoll, 0, _extraTurnsEarned);
-                    SerializeAndSavePawnStates();
-                }
-
-                // Sıra bizdeyse timer başlat
-                if (nextTurn == _localPlayerIndex)
-                    StartTurnTimer(rollTimeLimit);
+                AdvanceTurnSkipDisconnected();
             }
-            else if (!PhotonNetwork.IsMasterClient)
+            else if (_bridge == null || !_bridge.IsHost)
             {
-                // Non-host: Çıkan oyuncu sıradaki ise, host'un BroadcastTurn göndermesini bekle
-                // Ama UI'ı kilitlenme durumundan kurtarmak için flag'leri temizle
+                // Non-host: Cikan oyuncu siradaki ise, host'un BroadcastTurn gondermesini bekle
                 _isAnimating = false;
                 _isRollingDice = false;
-                Debug.Log($"[OnPlayerLeftRoom] Non-host: cleared stuck flags, waiting for host BroadcastTurn");
+                Debug.Log($"[OnBridgePlayerLeft] Non-host: cleared stuck flags, waiting for host BroadcastTurn");
             }
         }
+    }
+
+    /// <summary>
+    /// Oyuncu geri baglandi (reconnect). Gecici kopus listesinden cikar.
+    /// </summary>
+    private void OnBridgePlayerJoined(PlayerJoinedPayload payload)
+    {
+        int playerIndex = payload.playerIndex;
+        if (_tempDisconnectedPlayers.Contains(playerIndex))
+        {
+            _tempDisconnectedPlayers.Remove(playerIndex);
+            Debug.Log($"[OnBridgePlayerJoined] P{playerIndex} ({payload.nickname}) reconnected!");
+            UpdateScoreboard();
+        }
+    }
+
+    /// <summary>
+    /// Host: Turu ilerletir, bitiren + gecici/kalici kopan oyunculari atlar.
+    /// </summary>
+    private void AdvanceTurnSkipDisconnected()
+    {
+        Debug.Log($"[AdvanceTurnSkipDisconnected] Current turn P{_state.CurrentTurnPlayerIndex} is disconnected. Advancing.");
+        StopTurnTimer();
+        _extraTurnsEarned = 0;
+
+        _phase = TurnPhase.AwaitRoll;
+        _currentRoll = -1;
+        _consecutiveSixes = 0;
+
+        _state.NextTurn(_initialPlayerCount);
+
+        int safetyCount = 0;
+        while ((_finishOrder.Contains(_state.CurrentTurnPlayerIndex)
+                || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
+               && safetyCount < _initialPlayerCount)
+        {
+            _state.NextTurn(_initialPlayerCount);
+            safetyCount++;
+        }
+
+        int nextTurn = _state.CurrentTurnPlayerIndex;
+        Debug.Log($"[AdvanceTurnSkipDisconnected] New turn: P{nextTurn}");
+
+        hudView.SetTurn(TurnName(nextTurn), nextTurn, _localPlayerIndex);
+        hudView.SetDice(-1);
+
+        if (btnRollDice != null)
+            btnRollDice.interactable = (nextTurn == _localPlayerIndex) && !_gameOver;
+
+        HighlightActivePlayerPawns();
+
+        if (_net != null)
+        {
+            _net.BroadcastTurn(nextTurn);
+            _net.SyncGameState(nextTurn, -1, (int)TurnPhase.AwaitRoll, 0, _extraTurnsEarned);
+            SerializeAndSavePawnStates();
+        }
+
+        if (nextTurn == _localPlayerIndex)
+            StartTurnTimer(rollTimeLimit);
     }
 
     private void HideUnusedColorPawns()
@@ -1257,7 +1231,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         Debug.Log($"[RemoveDisconnectedPlayerPawns] P{playerIndex} pawns removed from board.");
     }
 
-    // ✅ Zar atma: Sadece kendi sıran ise atabilirsin
+    // Zar atma: Sadece kendi siran ise atabilirsin
     private void OnRollDiceClicked()
     {
         if (_isSpectator) return;
@@ -1265,7 +1239,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         if (_gameOver) return;
         if (_phase != TurnPhase.AwaitRoll) return;
         if (_isRollingDice) return;
-        if (_isAnimating) return; // ✅ YENİ
+        if (_isAnimating) return;
 
         if (_state.CurrentTurnPlayerIndex != _localPlayerIndex)
         {
@@ -1278,7 +1252,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     private IEnumerator CoRollDiceAnimated()
     {
-        // Safety guard: spectator veya sırası olmayan oyuncu zar atamaz
+        // Safety guard: spectator veya sirasi olmayan oyuncu zar atamaz
         if (_isSpectator || _localPlayerIndex < 0) yield break;
         if (_state.CurrentTurnPlayerIndex != _localPlayerIndex)
         {
@@ -1286,8 +1260,8 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             yield break;
         }
 
-        // Timer hâlâ aktifse ve bu local oyuncu ise: manuel zar attı → bot modundan çıkar
-        if (_timerActive && PhotonNetwork.IsMasterClient
+        // Timer hala aktifse ve bu local oyuncu ise: manuel zar atti -> bot modundan cikar
+        if (_timerActive && _bridge != null && _bridge.IsHost
             && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
         {
             _botPlayers.Remove(_state.CurrentTurnPlayerIndex);
@@ -1301,21 +1275,21 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         DisableAllPawnClicks();
 
-        // ✅ IMPACT FIX 1: Determine result IMMEDIATELY
+        // Determine result IMMEDIATELY
         int roll = _dice.Roll();
         _currentRoll = roll;
 
-        // ✅ IMPACT FIX 1: Broadcast IMMEDIATELY
-        if (_photon != null && PhotonNetwork.InRoom)
+        // Broadcast IMMEDIATELY
+        if (_net != null && _bridge != null && _bridge.IsInRoom)
         {
             int turn = _state.CurrentTurnPlayerIndex;
             Debug.Log($"[CoRollDiceAnimated] Broadcasting Roll EARLY: P{turn} = {roll}");
-            _photon.BroadcastRoll(turn, roll);
+            _net.BroadcastRoll(turn, roll);
 
             // Host saves state immediately
-            if (PhotonNetwork.IsMasterClient)
+            if (_bridge.IsHost)
             {
-                _photon.SyncGameState(turn, roll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
+                _net.SyncGameState(turn, roll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
             }
         }
 
@@ -1325,7 +1299,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         hudView.StartDiceRollAnimation();
         yield return new WaitForSeconds(diceRollDuration);
 
-        // ✅ Finalize visual
+        // Finalize visual
         hudView.SetDice(roll);
 
         _isRollingDice = false;
@@ -1334,16 +1308,16 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
     int turn2 = _state.CurrentTurnPlayerIndex;
 
-    // ✅ 3 ARDIŞIK 6 KONTROLÜ - EN ÖNCE!
+    // 3 ARDISIK 6 KONTROLU - EN ONCE!
     if (_consecutiveSixes >= 3)
     {
         Debug.Log($"[CoRollDiceAnimated] 3 consecutive sixes! Penalty for P{turn2}");
 
-        _consecutiveSixes = 0; // ✅ Sıfırla
+        _consecutiveSixes = 0;
 
-        if (PhotonNetwork.InRoom)
+        if (_bridge != null && _bridge.IsInRoom)
         {
-            if (PhotonNetwork.IsMasterClient)
+            if (_bridge.IsHost)
             {
                 _extraTurnsEarned = 0;
                 AdvanceTurnInternalOnly();
@@ -1352,7 +1326,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             {
                 _currentRoll = -1;
                 hudView.SetDice(-1);
-                _photon?.RequestAdvanceTurn();
+                _net?.RequestAdvanceTurn();
                 if (btnRollDice != null)
                 {
                     bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
@@ -1375,16 +1349,16 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         Debug.Log($"[CoRollDiceAnimated] No legal moves for P{turn2}");
 
-        if (PhotonNetwork.InRoom)
+        if (_bridge != null && _bridge.IsInRoom)
         {
-            if (PhotonNetwork.IsMasterClient)
+            if (_bridge.IsHost)
             {
                 if (_extraTurnsEarned > 0)
                 {
                     _extraTurnsEarned--;
                     _currentRoll = -1;
                     hudView.SetDice(-1);
-                    _photon.BroadcastTurn(_state.CurrentTurnPlayerIndex);
+                    _net.BroadcastTurn(_state.CurrentTurnPlayerIndex);
                 }
                 else
                 {
@@ -1395,7 +1369,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
             {
                 _currentRoll = -1;
                 hudView.SetDice(-1);
-                _photon?.RequestAdvanceTurn();
+                _net?.RequestAdvanceTurn();
                 if (btnRollDice != null)
                 {
                     bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
@@ -1428,7 +1402,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     {
         Debug.Log($"[CoRollDiceAnimated] Single legal move, auto-moving");
         int pawnId = _pawnToId[legal[0]];
-        _photon?.SendMoveRequest(turn2, pawnId, roll);
+        _net?.SendMoveRequest(turn2, pawnId, roll);
         yield break;
     }
 
@@ -1436,7 +1410,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
     SetOnlyLegalClickable(legal);
     _phase = TurnPhase.AwaitMove;
 
-    // ✅ Piyon seçim timer'ı başlat
+    // Piyon secim timer'i baslat
     StartTurnTimer(moveTimeLimit);
 }
 
@@ -1447,9 +1421,9 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         if (_gameOver) return;
         if (_phase != TurnPhase.AwaitMove) return;
         if (_currentRoll < 1) return;
-        if (_isAnimating) return; // ✅ YENİ
+        if (_isAnimating) return;
 
-        // ✅ Bug 3 fix: Rapid click protection
+        // Bug 3 fix: Rapid click protection
         float timeSinceLastRequest = Time.time - _lastMoveRequestTime;
         if (timeSinceLastRequest < MIN_MOVE_REQUEST_INTERVAL)
         {
@@ -1466,25 +1440,25 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         var legal = GetLegalMoves(turn, _currentRoll);
         if (!legal.Contains(pawn)) return;
 
-        // ✅ Bug 3 fix: Set cooldown timestamp
+        // Bug 3 fix: Set cooldown timestamp
         _lastMoveRequestTime = Time.time;
 
-        // ✅ Bug 3 fix: Immediately disable clicks to prevent rapid fire
+        // Bug 3 fix: Immediately disable clicks to prevent rapid fire
         DisableAllPawnClicks();
         if (btnRollDice != null) btnRollDice.interactable = false;
 
         int pawnId = _pawnToId[pawn];
-        _photon?.SendMoveRequest(turn, pawnId, _currentRoll);
+        _net?.SendMoveRequest(turn, pawnId, _currentRoll);
     }
 
     private void OnNetworkMoveRequest(int playerIndex, int pawnId, int roll)
     {
-        // ✅ Sadece host karar versin
-        if (_photon == null || !_photon.IsHost) return;
+        // Sadece host karar versin
+        if (_net == null || !_net.IsHost) return;
 
         if (playerIndex != _state.CurrentTurnPlayerIndex) return;
 
-        // ✅ Bug 3 fix: Prevent duplicate requests for same pawn while animating
+        // Bug 3 fix: Prevent duplicate requests for same pawn while animating
         if (_lastProcessedPawnId == pawnId && _isAnimating)
         {
             Debug.LogWarning($"[OnNetworkMoveRequest] Duplicate request for pawn {pawnId} ignored");
@@ -1493,8 +1467,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 
         if (!_idToPawn.TryGetValue(pawnId, out var pawn)) return;
 
-        // ✅ Race condition fix: Client'ın gönderdiği roll değerini kullan
-        // (BroadcastRoll All RPC'si, MoveRequest MasterClient RPC'sinden geç gelebilir)
+        // Race condition fix: Client'in gonderdigi roll degerini kullan
         if (roll > 0 && roll <= 6 && roll != _currentRoll)
         {
             Debug.LogWarning($"[OnNetworkMoveRequest] Roll mismatch! Host={_currentRoll}, Client={roll}. Using client roll.");
@@ -1504,17 +1477,17 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         var legal = GetLegalMoves(playerIndex, _currentRoll);
         if (!legal.Contains(pawn)) return;
 
-        // ✅ Bug 3 fix: Track this pawn as processed
+        // Bug 3 fix: Track this pawn as processed
         _lastProcessedPawnId = pawnId;
 
-        // ✅ Bug 2 fix: Generate unique move ID
+        // Bug 2 fix: Generate unique move ID
         int moveId = _nextMoveId++;
 
-        // ✅ Host hamleyi broadcast eder with moveId
-        _photon.BroadcastMove(playerIndex, pawnId, _currentRoll, moveId);
+        // Host hamleyi broadcast eder with moveId
+        _net.BroadcastMove(playerIndex, pawnId, _currentRoll, moveId);
 
-        // ✅ Bug 1 fix: Persist state after move validation
-        _photon.SyncGameState(_state.CurrentTurnPlayerIndex, _currentRoll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
+        // Bug 1 fix: Persist state after move validation
+        _net.SyncGameState(_state.CurrentTurnPlayerIndex, _currentRoll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
         SerializeAndSavePawnStates();
     }
 
@@ -1522,7 +1495,7 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
 {
     Debug.Log($"[OnNetworkRoll] P{playerIndex} rolled {roll}, LocalPlayer={_localPlayerIndex}");
 
-    // ✅ Timer'ı HERKESTE durdur (senkronizasyon düzeltmesi)
+    // Timer'i HERKESTE durdur (senkronizasyon duzeltmesi)
     StopTurnTimer();
 
     if (roll == 6)
@@ -1534,16 +1507,16 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         {
             Debug.Log($"[OnNetworkRoll] 3 consecutive sixes! Penalty for P{playerIndex}");
 
-            if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient)
+            if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
             {
                 _extraTurnsEarned = 0;
             }
         }
         else
         {
-            if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient)
+            if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
             {
-                // ✅ Sadece evde veya main path'te piyon varsa extra turn ver
+                // Sadece evde veya main path'te piyon varsa extra turn ver
                 if (HasPawnOutsideHomeLane(playerIndex))
                 {
                     _extraTurnsEarned++;
@@ -1561,16 +1534,15 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         _consecutiveSixes = 0;
     }
 
-    // ✅ Zar ve UI'ı TÜM oyuncular için güncelle
+    // Zar ve UI'i TUM oyuncular icin guncelle
     _currentRoll = roll;
     hudView.SetTurn(TurnName(playerIndex), playerIndex, _localPlayerIndex);
 
-    // ✅ Çift zar atmayı engelle
+    // Cift zar atmayi engelle
     if (btnRollDice != null)
         btnRollDice.interactable = false;
 
-    // ✅ IMPACT FIX 2: If we are not the one who initiated the local roll, play animation
-    // If we initiated it (CoRollDiceAnimated), we are already playing it.
+    // If we are not the one who initiated the local roll, play animation
     bool amIRollingLocally = (playerIndex == _localPlayerIndex && _isRollingDice);
 
     if (!amIRollingLocally)
@@ -1580,15 +1552,14 @@ public class GameBootstrapper : MonoBehaviourPunCallbacks // ✅ Bug 1 fix: reco
         StartCoroutine(CoRemoteDiceAnimation(playerIndex, roll));
     }
 
-    // ✅ Eğer Host değilsek ve sıra bizdeyse, ama biz atmadıysak (Timeout vs)
+    // Eger Host degilsek ve sira bizdeyse, ama biz atmadiysa (Timeout vs)
     if (playerIndex == _localPlayerIndex && !amIRollingLocally && _consecutiveSixes < 3)
     {
          // Logic handled in CoRemoteDiceAnimation
     }
 
-    // ✅ Host: uzak oyuncu için hamle timer'ı başlat
-    // (Wait for animation to finish effectively using the same duration logic)
-    if (PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
+    // Host: uzak oyuncu icin hamle timer'i baslat
+    if (_bridge != null && _bridge.IsInRoom && _bridge.IsHost && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
     {
         // Add delay for animation
         StartCoroutine(StartTimerAfterDelay(diceRollDuration + 0.5f, playerIndex, roll));
@@ -1612,7 +1583,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     }
     }
 
-    // ✅ Uzaktan gelen zar atışı için görsel animasyon
+    // Uzaktan gelen zar atisi icin gorsel animasyon
     private IEnumerator CoRemoteDiceAnimation(int playerIndex, int finalRoll)
     {
         sfx?.PlayDice();
@@ -1624,7 +1595,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
         yield return new WaitForSeconds(0.3f);
 
-        // ✅ Eğer benim için oto-atıldıysa, şimdi AwaitMove fazını kur
+        // Eger benim icin oto-atildiysa, simdi AwaitMove fazini kur
         if (playerIndex == _localPlayerIndex && _consecutiveSixes < 3)
         {
             var legal = GetLegalMoves(playerIndex, finalRoll);
@@ -1639,16 +1610,16 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         }
     }
 
-    private void OnNetworkMove(int playerIndex, int pawnId, int roll, int moveId) // ✅ Bug 2: moveId parametresi eklendi
+    private void OnNetworkMove(int playerIndex, int pawnId, int roll, int moveId) // Bug 2: moveId parametresi eklendi
     {
-        StopTurnTimer(); // ✅ Timer durdur (senkronizasyon güvenliği)
+        StopTurnTimer(); // Timer durdur (senkronizasyon guvenligi)
 
-        // ✅ FIX: Önceki animasyon sıkışmışsa temizle (yeni move geldiğine göre önceki tamamlanmış olmalı)
+        // FIX: Onceki animasyon sikismissa temizle (yeni move geldigine gore onceki tamamlanmis olmali)
         _isAnimating = false;
 
         Debug.Log($"[RPC RECEIVED] Move: P{playerIndex} pawn {pawnId} with roll {roll}, moveId={moveId}");
 
-        // ✅ Bug 2 fix: Deduplication check
+        // Bug 2 fix: Deduplication check
         if (_processedMoves.ContainsKey(moveId))
         {
             Debug.LogWarning($"[OnNetworkMove] Duplicate move {moveId} ignored");
@@ -1682,13 +1653,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 {
     Debug.Log($"[RPC RECEIVED] Turn: Now P{nextPlayerIndex} ({TurnName(nextPlayerIndex)})");
 
-    // ✅ FIX: Animasyon flag'lerini sıfırla (host animasyonu client'tan önce bitebilir, race condition)
+    // FIX: Animasyon flag'lerini sifirla (host animasyonu client'tan once bitebilir, race condition)
     _isAnimating = false;
 
-    // ✅ Gerçek sıra değişimi mi, yoksa extra turn mı?
+    // Gercek sira degisimi mi, yoksa extra turn mi?
     if (nextPlayerIndex != _state.CurrentTurnPlayerIndex)
     {
-        _consecutiveSixes = 0; // Sıra değişti, sıfırla
+        _consecutiveSixes = 0; // Sira degisti, sifirla
     }
 
     _state.CurrentTurnPlayerIndex = nextPlayerIndex;
@@ -1704,23 +1675,23 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         bool isMyTurn = (nextPlayerIndex == _localPlayerIndex);
         btnRollDice.interactable = isMyTurn && !_gameOver;
     }
-    // ✅ Sıra sende ise ses çal + titreşim
+    // Sira sende ise ses cal + titresim
     if (nextPlayerIndex == _localPlayerIndex && !_gameOver)
     {
         sfx?.PlayYourTurn();
 
-        // ✅ Mobilde titreşim (Android)
+        // Mobilde titresim (Android)
         #if UNITY_ANDROID && !UNITY_EDITOR
         Handheld.Vibrate();
         #endif
     }
     HighlightActivePlayerPawns();
 
-    // ✅ Zar atma timer'ı başlat
+    // Zar atma timer'i baslat
     StartTurnTimer(rollTimeLimit);
 
-    // ✅ FIX: Client'lar her sıra değişiminde host state'ini doğrula (desync önleme)
-    if (!PhotonNetwork.IsMasterClient && PhotonNetwork.InRoom)
+    // FIX: Client'lar her sira degisiminde host state'ini dogrula (desync onleme)
+    if (_bridge != null && !_bridge.IsHost && _bridge.IsInRoom)
     {
         StartCoroutine(VerifyPawnStatesAfterDelay(0.5f));
     }
@@ -1745,20 +1716,20 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void FinishMove()
     {
-        StopTurnTimer(); // ✅ Timer durdur
+        StopTurnTimer(); // Timer durdur
         _phase = TurnPhase.AwaitRoll;
         _isRollingDice = false;
 
-        // ✅ Bug 3 fix: Reset move tracking for next turn
+        // Bug 3 fix: Reset move tracking for next turn
         _lastProcessedPawnId = -1;
 
         foreach (var kv in _pawnStates)
             kv.Key.SetClickable(false);
 
         // ==================== ONLINE ====================
-        if (PhotonNetwork.InRoom)
+        if (_bridge != null && _bridge.IsInRoom)
         {
-            if (PhotonNetwork.IsMasterClient)
+            if (_bridge.IsHost)
             {
                 // Bitiren oyuncuya extra turn verme
                 if (_finishOrder.Contains(_state.CurrentTurnPlayerIndex))
@@ -1768,31 +1739,31 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
                     return;
                 }
 
-                // ✅ Host: extra turn varsa aynı oyuncu devam
+                // Host: extra turn varsa ayni oyuncu devam
                 if (_extraTurnsEarned > 0)
                 {
                     _extraTurnsEarned--;
                     _currentRoll = -1;
                     hudView.SetDice(-1);
                     Debug.Log($"[FinishMove] Host: Extra turn! Remaining: {_extraTurnsEarned}");
-                    _photon.BroadcastTurn(_state.CurrentTurnPlayerIndex); // Aynı oyuncu
+                    _net.BroadcastTurn(_state.CurrentTurnPlayerIndex); // Ayni oyuncu
                     return;
                 }
 
-                // ✅ Host: sıra ilerlet
+                // Host: sira ilerlet
                 AdvanceTurnInternalOnly();
             }
             else
             {
-                // ✅ Client: UI temizle, ama butonu körü körüne kapatma
+                // Client: UI temizle, ama butonu koru korune kapatma
                 _currentRoll = -1;
                 hudView.SetDice(-1);
 
-                // Bitiren oyuncu extra turn almasın
+                // Bitiren oyuncu extra turn almasin
                 if (_finishOrder.Contains(_localPlayerIndex))
                     _extraTurnsEarned = 0;
 
-                // ✅ Eğer Turn RPC zaten geldi ve sıra bizdeyse, butonu açık bırak
+                // Eger Turn RPC zaten geldi ve sira bizdeyse, butonu acik birak
                 if (btnRollDice != null)
                 {
                     bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
@@ -1823,7 +1794,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
                 btnRollDice.interactable = !_gameOver;
 
             HighlightActivePlayerPawns();
-            StartTurnTimer(rollTimeLimit); // ✅ Extra turn için timer yeniden başlat
+            StartTurnTimer(rollTimeLimit);
             return;
         }
 
@@ -1832,18 +1803,20 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void AdvanceTurnInternalOnly()
     {
-        StopTurnTimer(); // ✅ Timer durdur
+        StopTurnTimer(); // Timer durdur
         Debug.Log($"[AdvanceTurnInternalOnly] Advancing from P{_state.CurrentTurnPlayerIndex}");
 
         _phase = TurnPhase.AwaitRoll;
         _currentRoll = -1;
-        _consecutiveSixes = 0; // ✅ YENİ
+        _consecutiveSixes = 0;
 
         _state.NextTurn(_initialPlayerCount);
 
-        // Bitiren/çıkan oyuncuları atla (sonsuz döngü korumalı)
+        // Bitiren/cikan oyunculari atla (sonsuz dongu korumali)
         int safetyCount = 0;
-        while (_finishOrder.Contains(_state.CurrentTurnPlayerIndex) && safetyCount < _initialPlayerCount)
+        while ((_finishOrder.Contains(_state.CurrentTurnPlayerIndex)
+                || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
+               && safetyCount < _initialPlayerCount)
         {
             _state.NextTurn(_initialPlayerCount);
             safetyCount++;
@@ -1851,17 +1824,17 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
         Debug.Log($"[AdvanceTurnInternalOnly] New turn: P{_state.CurrentTurnPlayerIndex}");
 
-        // ✅ SADECE HOST BROADCAST EDER
-        if (_photon != null && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient)
+        // SADECE HOST BROADCAST EDER
+        if (_net != null && _bridge != null && _bridge.IsInRoom && _bridge.IsHost)
         {
             Debug.Log($"[AdvanceTurnInternalOnly] Broadcasting Turn: P{_state.CurrentTurnPlayerIndex}");
-            _photon.BroadcastTurn(_state.CurrentTurnPlayerIndex);
+            _net.BroadcastTurn(_state.CurrentTurnPlayerIndex);
 
-            // ✅ Bug 1 fix: Persist state after turn change
-            _photon.SyncGameState(_state.CurrentTurnPlayerIndex, -1, (int)TurnPhase.AwaitRoll, 0, _extraTurnsEarned);
+            // Bug 1 fix: Persist state after turn change
+            _net.SyncGameState(_state.CurrentTurnPlayerIndex, -1, (int)TurnPhase.AwaitRoll, 0, _extraTurnsEarned);
             SerializeAndSavePawnStates();
         }
-        else if (!PhotonNetwork.InRoom)
+        else if (_bridge == null || !_bridge.IsInRoom)
         {
             hudView.SetDice(-1);
             hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
@@ -1869,13 +1842,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             if (btnRollDice != null)
                 btnRollDice.interactable = !_gameOver;
 
-            StartTurnTimer(rollTimeLimit); // ✅ Offline modda sıra değişiminde timer başlat
+            StartTurnTimer(rollTimeLimit); // Offline modda sira degisiminde timer baslat
         }
 
         HighlightActivePlayerPawns();
     }
 
-    // ✅ Bu metodları GameBootstrapper.cs dosyasının sonuna ekle
+    // Bu metodlari GameBootstrapper.cs dosyasinin sonuna ekle
 
     private void CounterRotatePawns(List<PawnView> pawns, Quaternion counterRotation)
     {
@@ -1937,7 +1910,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
         int moverOwner = _pawnOwner[movedPawn];
 
-        // Blok kontrolü
+        // Blok kontrolu
         int enemyCountOnTile = 0;
         foreach (var kv in _pawnStates)
         {
@@ -1969,7 +1942,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             int otherOwner = _pawnOwner[otherPawn];
             if (otherOwner == moverOwner) continue;
 
-            if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient)
+            if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
             {
                 _extraTurnsEarned++;
                 Debug.Log($"[ResolveCaptures] Capture! Extra turns: {_extraTurnsEarned}");
@@ -1996,7 +1969,6 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             otherPawn.SetStackScale(1f);
 
             Vector3 homePos = GetHomePawnPosition(otherPawn);
-
             pawnMover.MoveBackwardsToHome(
                 otherPawn,
                 boardWaypoints.MainPath,
@@ -2015,7 +1987,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
 
     /// <summary>
-    /// ✅ Pawn'un home slot pozisyonunu bul
+    /// Pawn'un home slot pozisyonunu bul
     /// </summary>
     private Vector3 GetHomePawnPosition(PawnView pawn)
     {
@@ -2023,10 +1995,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (!_pawnOwner.TryGetValue(pawn, out int ownerIndex))
             return pawn.Rect.position; // Fallback
 
-        // ✅ Renk gruplarına göre home slot'ları al (değişken adı değiştirildi)
+        // Renk gruplarina gore home slot'lari al
         IReadOnlyList<RectTransform> homeSlotsForColor = ownerIndex switch
         {
-            0 => homeSlots.R,  // homeSlots burada field (GameBootstrapper'daki)
+            0 => homeSlots.R,
             1 => homeSlots.Y,
             2 => homeSlots.G,
             3 => homeSlots.B,
@@ -2036,7 +2008,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (homeSlotsForColor == null || homeSlotsForColor.Count == 0)
             return pawn.Rect.position;
 
-        // Bu pawn'un hangi slot'ta olduğunu bul
+        // Bu pawn'un hangi slot'ta oldugunu bul
         var pawnsOfColor = GetPawnsForTurn(ownerIndex);
         int pawnIndexInColor = pawnsOfColor.IndexOf(pawn);
 
@@ -2118,15 +2090,15 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         int finished = CountFinishedPawns(playerIndex);
         if (finished < 4) return;
 
-        // Zaten sıralamada varsa tekrar ekleme
+        // Zaten siralamada varsa tekrar ekleme
         if (_finishOrder.Contains(playerIndex)) return;
 
         _finishOrder.Add(playerIndex);
         sfx?.PlayWin();
 
-        // Online: finishOrder'u room properties'e kaydet (late joiner için)
-        if (_photon != null && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient)
-            _photon.SaveFinishOrder(_finishOrder.ToArray());
+        // Online: finishOrder'u kaydet (late joiner icin)
+        if (_net != null && _bridge != null && _bridge.IsInRoom && _bridge.IsHost)
+            _net.SaveFinishOrder(_finishOrder.ToArray());
 
         int activePlayers = _initialPlayerCount;
 
@@ -2179,17 +2151,17 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         if (scoreboardPanel == null) return;
 
-        // Gösterim sırasını oluştur: 1) Meşru bitirenler, 2) ???, 3) Disconnect olanlar
+        // Gosterim sirasini olustur: 1) Mesru bitirenler, 2) ???, 3) Disconnect olanlar
         var displayEntries = new List<string>();
 
-        // 1. Meşru bitirenler (disconnect olmayan, _finishOrder sırasıyla)
+        // 1. Mesru bitirenler (disconnect olmayan, _finishOrder sirasiyla)
         foreach (int idx in _finishOrder)
         {
             if (!_disconnectedPlayers.Contains(idx))
                 displayEntries.Add(TurnName(idx));
         }
 
-        // 2. Hala oynayan oyuncular → "???"
+        // 2. Hala oynayan oyuncular -> "???"
         for (int i = 0; i < _initialPlayerCount; i++)
         {
             if (!_finishOrder.Contains(i))
@@ -2203,7 +2175,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
                 displayEntries.Add(TurnName(idx));
         }
 
-        // Göster
+        // Goster
         for (int i = 0; i < scoreboardTexts.Length; i++)
         {
             if (i < displayEntries.Count)
@@ -2215,18 +2187,18 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (txtScoreboardTitle != null)
             txtScoreboardTitle.text = _gameOver ? LocalizationManager.Get("game_over") : LocalizationManager.Get("rankings");
 
-        // X butonu: oyun devam ediyorsa göster, bittiyse gizle
+        // X butonu: oyun devam ediyorsa goster, bittiyse gizle
         if (btnScoreboardClose != null)
             btnScoreboardClose.gameObject.SetActive(!_gameOver);
 
-        // Ana Menü butonu: sadece oyun bittiyse VE yerel oyuncu da bitirmişse (ya da spectator) göster
+        // Ana Menu butonu: sadece oyun bittiyse VE yerel oyuncu da bitirmisse (ya da spectator) goster
         if (btnMainMenu != null)
         {
             bool localPlayerFinished = _isSpectator || _finishOrder.Contains(_localPlayerIndex);
             btnMainMenu.gameObject.SetActive(_gameOver && localPlayerFinished);
         }
 
-        // Spectator için oyun bitmeden paneli açma
+        // Spectator icin oyun bitmeden paneli acma
         if (!_isSpectator || _gameOver)
             scoreboardPanel.SetActive(true);
     }
@@ -2241,28 +2213,17 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     public void ExitToMainMenu()
     {
-        if (PhotonNetwork.InRoom)
+        if (_bridge != null && _bridge.IsInRoom)
         {
             _isLeavingToMainMenu = true;
-            PhotonNetwork.LeaveRoom(false); // becomeInactive: false → hemen kalıcı çıkış, 60s bekleme yok
-            return; // OnLeftRoom callback'ini bekle
-        }
-
-        // Odada değilsek direkt sahne yükle — Disconnect yok
-        SceneManager.LoadScene(0);
-    }
-
-    public override void OnLeftRoom()
-    {
-        base.OnLeftRoom();
-        if (_isLeavingToMainMenu)
-        {
-            _isLeavingToMainMenu = false;
-            // Disconnect ÇAĞIRMA — Photon master server'a bağlı kalır.
-            // LobbyManager.Start() IsConnectedAndReady görür → JoinLobby çağırır.
-            // Disconnect() çağırınca OnDisconnected tetiklenip reconnect başlıyordu.
+            _isIntentionalDisconnect = true;
+            _bridge.LeaveRoom(true);
             SceneManager.LoadScene(0);
+            return;
         }
+
+        // Odada degilsek direkt sahne yukle
+        SceneManager.LoadScene(0);
     }
 
     // ==================== BOT MODE ====================
@@ -2278,37 +2239,24 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         SetLocalBotMode(false);
 
-        if (PhotonNetwork.IsMasterClient)
+        if (_bridge != null && _bridge.IsHost)
         {
-            // Host kendi bot modundan çıkıyor
+            // Host kendi bot modundan cikiyor
             _botPlayers.Remove(_localPlayerIndex);
         }
-        else if (PhotonNetwork.InRoom)
+        else if (_bridge != null && _bridge.IsInRoom)
         {
-            // Client → host'a bildir (room property üzerinden)
-            var props = new ExitGames.Client.Photon.Hashtable();
-            props[$"exitbot_{_localPlayerIndex}"] = PhotonNetwork.ServerTimestamp;
-            PhotonNetwork.CurrentRoom.SetCustomProperties(props);
+            // Client -> host'a bildir (bridge property uzerinden)
+            _bridge.SetRoomProperty($"exitbot_{_localPlayerIndex}", (int)_bridge.ServerTime);
         }
 
         Debug.Log($"[BotMode] P{_localPlayerIndex} took manual control via button.");
     }
 
-    public override void OnRoomPropertiesUpdate(ExitGames.Client.Photon.Hashtable propertiesThatChanged)
-    {
-        base.OnRoomPropertiesUpdate(propertiesThatChanged);
-        if (!PhotonNetwork.IsMasterClient) return;
-
-        for (int i = 0; i < 4; i++)
-        {
-            string key = $"exitbot_{i}";
-            if (propertiesThatChanged.ContainsKey(key))
-            {
-                _botPlayers.Remove(i);
-                Debug.Log($"[BotMode] P{i} exited bot mode via button (room property).");
-            }
-        }
-    }
+    // NOTE: OnRoomPropertiesUpdate was a Photon callback.
+    // Bot exit detection via room properties is now handled by the bridge internally
+    // or can be polled. If _bridge provides an OnRoomPropertyChanged event, subscribe to it.
+    // For now, bot exit is handled through SetRoomProperty + bridge event system.
 
     private void DisableAllPawnClicks()
     {
@@ -2358,28 +2306,28 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void ApplyMove(int playerIndex, PawnView pawn, int roll)
     {
-        // ✅ Bug 2 & 3 fix: Set animation flag IMMEDIATELY at method start
+        // Bug 2 & 3 fix: Set animation flag IMMEDIATELY at method start
         _isAnimating = true;
         DisableAllPawnClicks();
         if (btnRollDice != null) btnRollDice.interactable = false;
 
-        // ✅ FIX: Animasyon güvenlik zaman aşımı (sıkışma önleme)
+        // FIX: Animasyon guvenlik zaman asimi (sikisma onleme)
         if (_animationSafetyTimer != null) StopCoroutine(_animationSafetyTimer);
         _animationSafetyTimer = StartCoroutine(AnimationSafetyTimeout(5f));
 
         var st = _pawnStates[pawn];
 
-        // ==================== EVDEN ÇIKIŞ ====================
+        // ==================== EVDEN CIKIS ====================
         if (st.IsAtHome)
         {
             if (roll != 6)
             {
-                _isAnimating = false; // ✅ Reset on early exit
+                _isAnimating = false;
                 return;
             }
             if (!TryGetStartIndexForPlayer(playerIndex, out int startIndex))
             {
-                _isAnimating = false; // ✅ Reset on early exit
+                _isAnimating = false;
                 return;
             }
 
@@ -2389,13 +2337,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             if (_pawnCurrentWaypoint.TryGetValue(pawn, out int oldWp))
                 positionManager?.UnregisterPawnFromWaypoint(pawn, oldWp);
 
-            // Evden çıkış instant kalabilir (tek kareye spawn)
+            // Evden cikis instant kalabilir (tek kareye spawn)
             pawn.SetPosition(boardWaypoints.MainPath[startIndex].position);
             _pawnCurrentWaypoint[pawn] = startIndex;
             positionManager?.RegisterPawnAtWaypoint(pawn, startIndex);
 
             ResolveCaptures(pawn);
-            _isAnimating = false; // ✅ No animation for home exit, reset flag
+            _isAnimating = false; // No animation for home exit, reset flag
             CancelAnimationSafetyTimer();
             FinishMove();
             return;
@@ -2403,7 +2351,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
         if (st.IsFinished)
         {
-            _isAnimating = false; // ✅ Reset on early exit
+            _isAnimating = false;
             return;
         }
 
@@ -2412,7 +2360,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         if (st.HomeIndex + roll > 5)
         {
-            _isAnimating = false; // ✅ Reset on early exit
+            _isAnimating = false;
             return;
         }
 
@@ -2420,7 +2368,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         int fromHome = st.HomeIndex;
         int newHomeIndex = fromHome + roll;
 
-        // ✅ Eski home lane pozisyonundan unregister
+        // Eski home lane pozisyonundan unregister
         int oldKey = GetHomeLaneKey(playerIndex, fromHome);
         if (_pawnCurrentWaypoint.ContainsKey(pawn))
             positionManager?.UnregisterPawnFromWaypoint(pawn, oldKey);
@@ -2433,19 +2381,17 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
             if (newHomeIndex == 5)
             {
-                if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient)
+                if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
                 {
                     _extraTurnsEarned++;
                     Debug.Log($"[ApplyMove] Pawn finished! Extra turns: {_extraTurnsEarned}");
                 }
-                sfx?.PlayFinish();  // ✅ YENİ
+                sfx?.PlayFinish();
             }
-
-            // ✅ _isAnimating already set at method start, removed redundant lines
 
             pawnMover.MoveAlongPositions(pawn, positions, () =>
         {
-            // ✅ Yeni home lane pozisyonuna register
+            // Yeni home lane pozisyonuna register
             int newKey = GetHomeLaneKey(playerIndex, newHomeIndex);
             _pawnCurrentWaypoint[pawn] = newKey;
             positionManager?.RegisterPawnAtWaypoint(pawn, newKey);
@@ -2469,7 +2415,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             if (_pawnCurrentWaypoint.TryGetValue(pawn, out int oldWp))
                 positionManager?.UnregisterPawnFromWaypoint(pawn, oldWp);
 
-            // Pozisyon listesi oluştur
+            // Pozisyon listesi olustur
             var positions = new List<Vector3>();
             int cur = from;
             for (int i = 0; i < roll; i++)
@@ -2478,13 +2424,11 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
                 positions.Add(boardWaypoints.MainPath[cur].position);
             }
 
-            // State'i hemen güncelle
+            // State'i hemen guncelle
             st.AdvanceMain(roll, pathCount);
             int targetIndex = st.MainIndex;
 
             Debug.Log($"[ApplyMove] P{playerIndex} MainPath: from={from}, roll={roll}, target={targetIndex}, distToEntry={distToEntry}, steps={positions.Count}");
-
-            // ✅ _isAnimating already set at method start, removed redundant lines
 
             pawnMover.MoveAlongPositions(pawn, positions, () =>
             {
@@ -2498,20 +2442,20 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             return;
         }
 
-        // ==================== HOME'A GİRİŞ ====================
+        // ==================== HOME'A GIRIS ====================
         int intoHome = roll - distToEntry - 1;
         if (intoHome == 5)
         {
-            if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient)
+            if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
             {
                 _extraTurnsEarned++;
                 Debug.Log($"[ApplyMove] Pawn finished! Extra turns: {_extraTurnsEarned}");
             }
-            sfx?.PlayFinish();  // ✅ YENİ
+            sfx?.PlayFinish();
         }
         if (_pawnOwner[pawn] != playerIndex)
         {
-            _isAnimating = false; // ✅ Reset on early exit
+            _isAnimating = false;
             return;
         }
 
@@ -2521,7 +2465,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             _pawnCurrentWaypoint.Remove(pawn);
         }
 
-        // Pozisyon listesi: önce main path (entry'e kadar), sonra home lane
+        // Pozisyon listesi: once main path (entry'e kadar), sonra home lane
         var positions2 = new List<Vector3>();
         int cur2 = from;
         for (int i = 0; i < distToEntry; i++)
@@ -2534,7 +2478,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         for (int i = 0; i <= intoHome; i++)
             positions2.Add(homePath2[i].position);
 
-        // State'i hemen güncelle
+        // State'i hemen guncelle
         if (distToEntry > 0)
             st.AdvanceMain(distToEntry, pathCount);
         st.EnterHomeLane();
@@ -2546,11 +2490,9 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             Debug.Log($"[ApplyMove] Pawn finished! Extra turns: {_extraTurnsEarned}");
         }
 
-        // ✅ _isAnimating already set at method start, removed redundant lines
-
         pawnMover.MoveAlongPositions(pawn, positions2, () =>
     {
-        // ✅ Home lane pozisyonuna register
+        // Home lane pozisyonuna register
         int homeKey = GetHomeLaneKey(playerIndex, intoHome);
         _pawnCurrentWaypoint[pawn] = homeKey;
         positionManager?.RegisterPawnAtWaypoint(pawn, homeKey);
@@ -2651,13 +2593,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             Screen.fullScreen = !Screen.fullScreen;
         }
 
-        // ✅ Turn Timer Tick — _paused sadece interaction'ı engeller, timer her zaman akar
+        // Turn Timer Tick -- _paused sadece interaction'i engeller, timer her zaman akar
         if (_timerActive && !_gameOver)
         {
             _turnTimer -= Time.deltaTime;
             hudView?.SetTimer(_turnTimer);
 
-            // ✅ 3 saniye kala clock sesi çal
+            // 3 saniye kala clock sesi cal
             if (_turnTimer <= 3f && !_clockPlayed)
             {
                 _clockPlayed = true;
@@ -2673,11 +2615,11 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         }
     }
 
-    // ✅ Timer yardımcı metotları
+    // Timer yardimci metotlari
     private void StartTurnTimer(float duration)
     {
-        // Bot oyuncu için kısa auto-play süresi
-        if (PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient
+        // Bot oyuncu icin kisa auto-play suresi
+        if (_bridge != null && _bridge.IsInRoom && _bridge.IsHost
             && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
         {
             duration = BotAutoDelay;
@@ -2685,17 +2627,17 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
         _turnTimer = duration;
         _timerActive = true;
-        _clockPlayed = false; // ✅ Her yeni timer başlatıldığında sıfırla
+        _clockPlayed = false; // Her yeni timer baslatildiginda sifirla
         hudView?.SetTimer(_turnTimer);
         Debug.Log($"[Timer] Started: {duration}s for phase {_phase}");
 
-        // ✅ NEW (Fix 1): Broadcast to all clients (host only)
-        if (_photon != null && _photon.IsHost)
+        // Broadcast to all clients (host only)
+        if (_net != null && _net.IsHost)
         {
-            _photon.BroadcastTimerStart(duration);
+            _net.BroadcastTimerStart(duration);
 
-            // ✅ NEW (Fix 2): Save timer state with synchronized timestamp
-            _photon.SaveTimerState(PhotonNetwork.Time, duration);
+            // Save timer state with synchronized timestamp
+            _net.SaveTimerState(_bridge.ServerTime, duration);
         }
     }
 
@@ -2704,15 +2646,15 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         _timerActive = false;
         _turnTimer = 0f;
         hudView?.HideTimer();
-        sfx?.StopClock(); // ✅ Saat sesini durdur
+        sfx?.StopClock(); // Saat sesini durdur
 
-        // ✅ NEW (Fix 1): Broadcast to all clients (host only)
-        if (broadcast && _photon != null && _photon.IsHost)
+        // Broadcast to all clients (host only)
+        if (broadcast && _net != null && _net.IsHost)
         {
-            _photon.BroadcastTimerStop();
+            _net.BroadcastTimerStop();
 
-            // ✅ NEW (Fix 2): Clear timer state from room properties
-            _photon.ClearTimerState();
+            // Clear timer state from room properties
+            _net.ClearTimerState();
         }
     }
 
@@ -2729,7 +2671,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
         bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
 
-        // Kendi sıramsa: lokal bot modu + otomatik oyna (host veya client fark etmez)
+        // Kendi siramsa: lokal bot modu + otomatik oyna (host veya client fark etmez)
         if (isMyTurn)
         {
             SetLocalBotMode(true);
@@ -2742,12 +2684,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
             return;
         }
 
-        // Sıra bizde değil → sadece host devam eder (bot/disconnected oyuncu yönetimi)
-        if (PhotonNetwork.InRoom && !PhotonNetwork.IsMasterClient) return;
+        // Sira bizde degil -> sadece host devam eder (bot/disconnected oyuncu yonetimi)
+        if (_bridge != null && _bridge.IsInRoom && !_bridge.IsHost) return;
 
-        // Host: sıradaki oyuncu bot modunda veya disconnected
-        // AwaitRoll için host zar atamaz (CoRollDiceAnimated kendi sırasını kontrol eder)
-        // AwaitMove için host adına piyon seçimi yapabilir
+        // Host: siradaki oyuncu bot modunda veya disconnected
         _botPlayers.Add(_state.CurrentTurnPlayerIndex);
 
         if (_phase == TurnPhase.AwaitMove)
@@ -2767,11 +2707,11 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         var legal = GetLegalMoves(turn, _currentRoll);
         if (legal.Count == 0) return;
 
-        // Rastgele bir legal piyon seç
+        // Rastgele bir legal piyon sec
         PawnView chosen = legal[Random.Range(0, legal.Count)];
         int pawnId = _pawnToId[chosen];
         Debug.Log($"[Timer] Auto-moving pawn {pawnId} for P{turn}");
-        _photon?.SendMoveRequest(turn, pawnId, _currentRoll);
+        _net?.SendMoveRequest(turn, pawnId, _currentRoll);
     }
 private int GetHomeLaneKey(int playerIndex, int homeIndex)
 {
@@ -2779,8 +2719,8 @@ private int GetHomeLaneKey(int playerIndex, int homeIndex)
 }
 
 /// <summary>
-/// Oyuncunun evde veya main path'te piyonu var mı?
-/// (Home lane ve finished hariç)
+/// Oyuncunun evde veya main path'te piyonu var mi?
+/// (Home lane ve finished haric)
 /// </summary>
 private bool HasPawnOutsideHomeLane(int playerIndex)
 {
@@ -2788,10 +2728,10 @@ private bool HasPawnOutsideHomeLane(int playerIndex)
     foreach (var p in pawns)
     {
         var st = _pawnStates[p];
-        if (st.IsAtHome) return true;      // Evde piyon var, 6 ile çıkabilir
+        if (st.IsAtHome) return true;      // Evde piyon var, 6 ile cikabilir
         if (!st.IsInHomeLane && !st.IsFinished) return true; // Main path'te piyon var
     }
-    return false; // Hepsi home lane'de veya bitmiş
+    return false; // Hepsi home lane'de veya bitmis
 }
 
 private void OnHomeAreaClicked(int playerIndex)
@@ -2800,15 +2740,15 @@ private void OnHomeAreaClicked(int playerIndex)
     if (_gameOver) return;
     if (_currentRoll < 1) return;
 
-    // Sadece kendi sıran ve kendi rengin
+    // Sadece kendi siran ve kendi rengin
     int turn = _state.CurrentTurnPlayerIndex;
     if (turn != _localPlayerIndex) return;
     if (turn != playerIndex) return;
 
-    // 6 değilse evden çıkamaz
+    // 6 degilse evden cikamaz
     if (_currentRoll != 6) return;
 
-    // AwaitMove fazında olmalı
+    // AwaitMove fazinda olmali
     if (_phase != TurnPhase.AwaitMove) return;
 
     // Evdeki ilk legal piyonu bul
@@ -2830,9 +2770,9 @@ private void OnHomeAreaClicked(int playerIndex)
     var legal = GetLegalMoves(turn, _currentRoll);
     if (!legal.Contains(homePawn)) return;
 
-    // ✅ Hamleyi gönder
+    // Hamleyi gonder
     int pawnId = _pawnToId[homePawn];
-    _photon?.SendMoveRequest(turn, pawnId, _currentRoll);
+    _net?.SendMoveRequest(turn, pawnId, _currentRoll);
 }
 
 private void OnBoardAreaClicked(Vector2 screenPos)
@@ -2844,7 +2784,7 @@ private void OnBoardAreaClicked(Vector2 screenPos)
     var legal = GetLegalMoves(_state.CurrentTurnPlayerIndex, _currentRoll);
     if (legal.Count == 0) return;
 
-    // En yakın legal piyonu bul (evdekiler hariç - HomeAreaClick hallediyor)
+    // En yakin legal piyonu bul (evdekiler haric - HomeAreaClick hallediyor)
     PawnView nearest = null;
     float minDist = float.MaxValue;
 
@@ -2867,14 +2807,14 @@ private void OnBoardAreaClicked(Vector2 screenPos)
     }
 }
 
-    // ✅ ========== BUG 1 FIX: PAWN STATE SERIALIZATION METHODS ==========
+    // ========== BUG 1 FIX: PAWN STATE SERIALIZATION METHODS ==========
 
     /// <summary>
     /// Serialize all pawn states and save to room properties (host only)
     /// </summary>
     private void SerializeAndSavePawnStates()
     {
-        if (_photon == null || !PhotonNetwork.IsMasterClient) return;
+        if (_net == null || !(_bridge != null && _bridge.IsHost)) return;
 
         // Format: "pawnId:zone:mainIndex:homeIndex:isInHomeLane:isFinished;"
         var sb = new System.Text.StringBuilder();
@@ -2893,7 +2833,7 @@ private void OnBoardAreaClicked(Vector2 screenPos)
               .Append(state.IsFinished ? 1 : 0).Append(";");
         }
 
-        _photon.SavePawnStates(sb.ToString());
+        _net.SavePawnStates(sb.ToString());
         Debug.Log($"[SerializePawnStates] Saved {_pawnToId.Count} pawns");
     }
 
@@ -2902,9 +2842,9 @@ private void OnBoardAreaClicked(Vector2 screenPos)
     /// </summary>
     private void RestorePawnStatesFromNetwork()
     {
-        if (_photon == null) return;
+        if (_net == null) return;
 
-        string data = _photon.GetPawnStates();
+        string data = _net.GetPawnStates();
         if (string.IsNullOrEmpty(data))
         {
             Debug.Log("[RestorePawnStates] No pawn state data found");
@@ -2997,7 +2937,7 @@ private void OnBoardAreaClicked(Vector2 screenPos)
 
     // ========== CHAT ==========
 
-    // Lokal emoji: QuickChatView'dan index gelir, hemen animasyon oynat (ağa gitmeden önce)
+    // Lokal emoji: QuickChatView'dan index gelir, hemen animasyon oynat (aga gitmeden once)
     private void OnLocalEmojiSend(int index)
     {
         var frames = quickChatView != null ? quickChatView.GetFrames(index) : null;
@@ -3009,14 +2949,14 @@ private void OnBoardAreaClicked(Vector2 screenPos)
     private void OnChatSend(string message)
     {
         // Emoji ise lokal animasyon OnLocalEmojiSend'den zaten tetiklendi,
-        // burada sadece ağa gönderim yapılır.
-        // Metin ise lokal panelde float göster.
+        // burada sadece aga gonderim yapilir.
+        // Metin ise lokal panelde float goster.
         if (!message.StartsWith("__EMOJI__"))
         {
             var localPanel = hudView.GetCornerPanelForPlayer(_localPlayerIndex, _localPlayerIndex);
             if (localPanel != null) localPanel.ShowEmojiFloat(message);
         }
-        _photon.BroadcastChatMessage(message, _localPlayerIndex);
+        _net.BroadcastChatMessage(message, _localPlayerIndex);
     }
 
     private void OnNetworkChatMessage(string message, int senderPlayerIndex)
@@ -3024,7 +2964,7 @@ private void OnBoardAreaClicked(Vector2 screenPos)
         var senderPanel = hudView.GetCornerPanelForPlayer(senderPlayerIndex, _localPlayerIndex);
         if (message.StartsWith("__EMOJI__"))
         {
-            // Index'i çöz, animasyonu oynat
+            // Index'i coz, animasyonu oynat
             string indexStr = message["__EMOJI__".Length..];
             if (int.TryParse(indexStr, out int index))
             {

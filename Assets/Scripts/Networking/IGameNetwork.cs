@@ -40,5 +40,9 @@ namespace LudoFriends.Networking
         // Chat
         event Action<string, int> OnChatMessage; // (message, senderPlayerIndex)
         void BroadcastChatMessage(string message, int senderPlayerIndex);
+
+        // Finish Order
+        void SaveFinishOrder(int[] finishOrder);
+        int[] GetFinishOrder();
     }
 }

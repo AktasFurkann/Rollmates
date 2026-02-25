@@ -1,5 +1,5 @@
 using TMPro;
-using Photon.Pun;
+using LudoFriends.Networking;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -100,11 +100,12 @@ public void Resume()
         }
 
         // Fallback: GameBootstrapper yoksa direkt çık
-        if (PhotonNetwork.InRoom)
-            PhotonNetwork.LeaveRoom();
+        var bridge = SocketIONetworkBridge.Instance;
+        if (bridge != null && bridge.IsInRoom)
+            bridge.LeaveRoom(true);
 
-        if (PhotonNetwork.IsConnected)
-            PhotonNetwork.Disconnect();
+        if (bridge != null && bridge.IsConnected)
+            bridge.Disconnect();
 
         SceneManager.LoadScene(0);
     }
