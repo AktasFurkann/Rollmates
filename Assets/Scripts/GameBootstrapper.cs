@@ -101,7 +101,6 @@ public class GameBootstrapper : MonoBehaviour
     private bool _isLeavingToMainMenu = false;
     private bool _isIntentionalDisconnect = false;
     private bool _localBotMode = false;
-    private bool _tookManualControl = false; // Take Control sonrasi host timer broadcast'ini yoksay
     private bool _isSpectator = false;
     private readonly List<int> _finishOrder = new List<int>();
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
@@ -131,6 +130,7 @@ public class GameBootstrapper : MonoBehaviour
     private float _turnTimer = 0f;
     private bool _timerActive = false;
     private bool _clockPlayed = false;
+    private Coroutine _timerDelayCoroutine; // StartTimerAfterDelay coroutine ref
 
     private string TurnName(int index) => LocalizationManager.GetColorName(index);
 
@@ -1561,13 +1561,15 @@ public class GameBootstrapper : MonoBehaviour
     if (_bridge != null && _bridge.IsInRoom && _bridge.IsHost && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
     {
         // Add delay for animation
-        StartCoroutine(StartTimerAfterDelay(diceRollDuration + 0.5f, playerIndex, roll));
+        if (_timerDelayCoroutine != null) StopCoroutine(_timerDelayCoroutine);
+        _timerDelayCoroutine = StartCoroutine(StartTimerAfterDelay(diceRollDuration + 0.5f, playerIndex, roll));
     }
 }
 
 private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 {
     yield return new WaitForSeconds(delay);
+    _timerDelayCoroutine = null; // Coroutine bitti, ref temizle
 
     // Check if state is still valid
     if (_state.CurrentTurnPlayerIndex == playerIndex && _currentRoll == roll)
@@ -1665,7 +1667,6 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     _phase = TurnPhase.AwaitRoll;
     _isRollingDice = false;
     _currentRoll = -1;
-    _tookManualControl = false; // Sira degisiminde manual control flag sifirla
 
     hudView.SetDice(-1);
     hudView.SetTurn(TurnName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
@@ -1707,7 +1708,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStart(float duration)
     {
-        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan
+        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan (host ezemez)
         if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_localBotMode)
         {
             Debug.Log($"[Timer] Ignoring host timer ({duration}s) - local player is active (not bot)");
@@ -2246,7 +2247,19 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         SetLocalBotMode(false);
         _botPlayers.Remove(_localPlayerIndex);
-        _tookManualControl = true;
+
+        // Bot'un devam eden coroutine'lerini durdur (FinishMove timer'i ezmesini engelle)
+        StopCoroutine("CoRollDiceAnimated");
+        CancelAnimationSafetyTimer();
+        _isRollingDice = false;
+        _isAnimating = false;
+
+        // Bekleyen timer delay coroutine'ini iptal et (bot timer'in ustune yazmasini engelle)
+        if (_timerDelayCoroutine != null)
+        {
+            StopCoroutine(_timerDelayCoroutine);
+            _timerDelayCoroutine = null;
+        }
 
         // Timer'i durdur ve normal sureli yeniden baslat
         StopTurnTimer(false);
@@ -2282,6 +2295,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     {
         _botPlayers.Remove(playerIndex);
         Debug.Log($"[BotMode] P{playerIndex} exited bot mode (network).");
+
+        // Bekleyen timer delay coroutine'ini iptal et (bot timer'in ustune yazmasini engelle)
+        if (_timerDelayCoroutine != null)
+        {
+            StopCoroutine(_timerDelayCoroutine);
+            _timerDelayCoroutine = null;
+        }
 
         // Host: timer'i normal sureyle yeniden baslat ve broadcast et
         // ANCAK kendi exit_bot'umuzsa (Take Control), OnTakeControlClicked zaten halletti
@@ -2661,8 +2681,8 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     // Timer yardimci metotlari
     private void StartTurnTimer(float duration)
     {
-        // Bot oyuncu icin kisa auto-play suresi
-        if (_bridge != null && _bridge.IsInRoom && _bridge.IsHost
+        // Bot oyuncu icin kisa auto-play suresi (host ve client)
+        if (_bridge != null && _bridge.IsInRoom
             && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
         {
             duration = BotAutoDelay;
@@ -2703,7 +2723,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStop()
     {
-        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan
+        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan (host ezemez)
         if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_localBotMode)
         {
             Debug.Log("[Timer] Ignoring host timer stop - local player is active (not bot)");
