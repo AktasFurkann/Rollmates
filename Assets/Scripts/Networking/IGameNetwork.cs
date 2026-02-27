@@ -29,7 +29,7 @@ namespace LudoFriends.Networking
         string GetPawnStates();
 
         // ✅ Timer Synchronization Methods (Fix 1)
-        void BroadcastTimerStart(float duration);
+        void BroadcastTimerStart(float duration, int playerIndex);
         void BroadcastTimerStop();
 
         // ✅ Timer State Persistence (Fix 2)

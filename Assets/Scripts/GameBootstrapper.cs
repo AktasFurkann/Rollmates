@@ -195,6 +195,9 @@ public class GameBootstrapper : MonoBehaviour
             _bridge.OnPlayerLeft += OnBridgePlayerLeft;
             _bridge.OnPlayerJoined += OnBridgePlayerJoined;
             _bridge.OnExitBot += OnNetworkExitBot;
+            _bridge.OnEnterBot += OnNetworkEnterBot;
+            _bridge.OnServerTimerExpired += OnServerTimerExpired;
+            _bridge.OnServerTimerExpiredDisconnected += OnServerTimerExpiredDisconnected;
         }
 
         // Player index + spectator tespiti + initialPlayerCount
@@ -1708,16 +1711,12 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStart(float duration)
     {
-        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan (host ezemez)
-        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_localBotMode)
-        {
-            Debug.Log($"[Timer] Ignoring host timer ({duration}s) - local player is active (not bot)");
-            return;
-        }
-
-        // Start local timer display for all clients
+        // Sunucu dogru sureyi gonderiyor (bot override dahil), herkese uygula
         _timerActive = true;
         _turnTimer = duration;
+        _clockPlayed = false;
+        hudView?.SetTimer(_turnTimer);
+        Debug.Log($"[Timer] Network timer start: {duration}s for P{_state.CurrentTurnPlayerIndex}");
     }
 
 
@@ -2291,6 +2290,12 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         Debug.Log($"[BotMode] P{_localPlayerIndex} took manual control via button.");
     }
 
+    private void OnNetworkEnterBot(int playerIndex)
+    {
+        _botPlayers.Add(playerIndex);
+        Debug.Log($"[BotMode] P{playerIndex} entered bot mode (network).");
+    }
+
     private void OnNetworkExitBot(int playerIndex)
     {
         _botPlayers.Remove(playerIndex);
@@ -2681,12 +2686,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     // Timer yardimci metotlari
     private void StartTurnTimer(float duration)
     {
-        // Bot oyuncu icin kisa auto-play suresi (host ve client)
-        if (_bridge != null && _bridge.IsInRoom
-            && _botPlayers.Contains(_state.CurrentTurnPlayerIndex))
-        {
-            duration = BotAutoDelay;
-        }
+        // Bot override KALDIRILDI - sunucu hallediyor (server-side timer)
 
         _turnTimer = duration;
         _timerActive = true;
@@ -2694,10 +2694,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         hudView?.SetTimer(_turnTimer);
         Debug.Log($"[Timer] Started: {duration}s for phase {_phase}");
 
-        // Broadcast to all clients (host only)
+        // Broadcast to all clients (host only) - sunucu bot override uygular
         if (_net != null && _net.IsHost)
         {
-            _net.BroadcastTimerStart(duration);
+            _net.BroadcastTimerStart(duration, _state.CurrentTurnPlayerIndex);
 
             // Save timer state with synchronized timestamp
             _net.SaveTimerState(_bridge.ServerTime, duration);
@@ -2723,14 +2723,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void OnNetworkTimerStop()
     {
-        // Sira bizdeyse ve bot degilsek, kendi lokal timer'imizi kullan (host ezemez)
-        if (_state.CurrentTurnPlayerIndex == _localPlayerIndex && !_localBotMode)
-        {
-            Debug.Log("[Timer] Ignoring host timer stop - local player is active (not bot)");
-            return;
-        }
-
-        // Stop local timer display for all clients
+        // Sunucu timer_stop gonderiyor, herkese uygula
         StopTurnTimer(false);
     }
 
@@ -2739,35 +2732,56 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         if (_isSpectator) return;
         Debug.Log($"[Timer] Expired! Phase={_phase}, Turn=P{_state.CurrentTurnPlayerIndex}");
 
-        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+        // ONLINE modda sunucu server_timer_expired gonderiyor - burada sadece OFFLINE icin
+        if (_bridge != null && _bridge.IsInRoom) return;
 
-        // Kendi siramsa: lokal bot modu + otomatik oyna (host veya client fark etmez)
+        // OFFLINE mod (local oyun) - eski mantik aynen kalir
+        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
         if (isMyTurn)
         {
             SetLocalBotMode(true);
             _botPlayers.Add(_state.CurrentTurnPlayerIndex);
-
-            if (_phase == TurnPhase.AwaitRoll)
-                AutoRollDice();
-            else if (_phase == TurnPhase.AwaitMove)
-                AutoMovePawn();
+            if (_phase == TurnPhase.AwaitRoll) AutoRollDice();
+            else if (_phase == TurnPhase.AwaitMove) AutoMovePawn();
             return;
         }
 
-        // Sira bizde degil -> sadece host devam eder (bot/disconnected oyuncu yonetimi)
-        if (_bridge != null && _bridge.IsInRoom && !_bridge.IsHost) return;
-
-        // Host: siradaki oyuncuyu bot olarak isaretle (kisa timer icin)
+        // Offline disconnected (guvenlik icin)
         _botPlayers.Add(_state.CurrentTurnPlayerIndex);
+        if (_phase == TurnPhase.AwaitRoll) AutoRollDice();
+        else if (_phase == TurnPhase.AwaitMove) AutoMovePawn();
+    }
 
-        // Bagli oyuncular kendi bot modunu kendileri yonetiyor (yukaridaki isMyTurn blogu).
-        // Host sadece gecici kopuk (disconnected) oyuncular icin auto-play yapar.
-        if (!_tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)) return;
+    // Sunucu timer suresi doldu - connected oyuncu icin
+    private void OnServerTimerExpired(int playerIndex)
+    {
+        if (playerIndex != _localPlayerIndex) return;
+        if (_isSpectator) return;
+
+        Debug.Log($"[Timer] Server says timer expired for P{playerIndex}, phase={_phase}");
+        SetLocalBotMode(true);
+        _botPlayers.Add(playerIndex);
+
+        if (_bridge != null && _bridge.IsInRoom)
+            _bridge.SendEnterBot(playerIndex);
 
         if (_phase == TurnPhase.AwaitRoll)
             AutoRollDice();
         else if (_phase == TurnPhase.AwaitMove)
             AutoMovePawn();
+    }
+
+    // Sunucu timer suresi doldu - disconnected oyuncu icin (HOST alir)
+    private void OnServerTimerExpiredDisconnected(int playerIndex)
+    {
+        if (_bridge == null || !_bridge.IsHost) return;
+        if (!_tempDisconnectedPlayers.Contains(playerIndex)) return;
+
+        Debug.Log($"[Timer] Server says timer expired for disconnected P{playerIndex}");
+        _botPlayers.Add(playerIndex);
+
+        if (_phase == TurnPhase.AwaitRoll) AutoRollDice();
+        else if (_phase == TurnPhase.AwaitMove) AutoMovePawn();
     }
 
     private void AutoRollDice()

@@ -139,6 +139,18 @@ namespace LudoFriends.Networking
     }
 
     [Serializable]
+    public class EnterBotPayload
+    {
+        public int playerIndex;
+    }
+
+    [Serializable]
+    public class ServerTimerExpiredPayload
+    {
+        public int playerIndex;
+    }
+
+    [Serializable]
     public class ChatPayload
     {
         public string message;

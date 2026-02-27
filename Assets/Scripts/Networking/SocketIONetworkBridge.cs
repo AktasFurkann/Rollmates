@@ -21,6 +21,9 @@ namespace LudoFriends.Networking
         public event Action OnTimerStop;
         public event Action<string, int> OnChatMessage;
         public event Action<int> OnExitBot;
+        public event Action<int> OnEnterBot;
+        public event Action<int> OnServerTimerExpired;
+        public event Action<int> OnServerTimerExpiredDisconnected;
 
         // ── Lobby/Room Events (for LobbyManager & GameBootstrapper) ──
         public event Action<JoinedRoomPayload> OnJoinedRoom;
@@ -317,6 +320,24 @@ namespace LudoFriends.Networking
                 OnExitBot?.Invoke(data.playerIndex);
             });
 
+            _socket.OnUnityThread("enter_bot_fwd", response =>
+            {
+                var data = response.GetValue<EnterBotPayload>();
+                OnEnterBot?.Invoke(data.playerIndex);
+            });
+
+            _socket.OnUnityThread("server_timer_expired", response =>
+            {
+                var data = response.GetValue<ServerTimerExpiredPayload>();
+                OnServerTimerExpired?.Invoke(data.playerIndex);
+            });
+
+            _socket.OnUnityThread("server_timer_expired_disconnected", response =>
+            {
+                var data = response.GetValue<ServerTimerExpiredPayload>();
+                OnServerTimerExpiredDisconnected?.Invoke(data.playerIndex);
+            });
+
             _socket.OnUnityThread("timer_start", response =>
             {
                 var data = response.GetValue<TimerStartPayload>();
@@ -432,13 +453,21 @@ namespace LudoFriends.Networking
         {
             if (_isHost)
                 OnExitBot?.Invoke(playerIndex);
-            else
-                _socket?.Emit("exit_bot", new { playerIndex });
+            // Sunucuya her zaman bildir (bot tracking icin)
+            _socket?.Emit("exit_bot", new { playerIndex });
         }
 
-        public void BroadcastTimerStart(float duration)
+        public void SendEnterBot(int playerIndex)
         {
-            _socket?.Emit("broadcast_timer_start", new { duration });
+            if (_isHost)
+                OnEnterBot?.Invoke(playerIndex);
+            // Sunucuya her zaman bildir (bot tracking icin)
+            _socket?.Emit("enter_bot", new { playerIndex });
+        }
+
+        public void BroadcastTimerStart(float duration, int playerIndex)
+        {
+            _socket?.Emit("broadcast_timer_start", new { duration, playerIndex });
         }
 
         public void BroadcastTimerStop()
