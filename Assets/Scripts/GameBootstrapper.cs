@@ -41,10 +41,10 @@ public class GameBootstrapper : MonoBehaviour
     private Coroutine _reconnectCoroutine;
 
     [Header("Home Click Areas")]
-[SerializeField] private HomeAreaClick homeClickRed;
-[SerializeField] private HomeAreaClick homeClickGreen;
-[SerializeField] private HomeAreaClick homeClickYellow;
-[SerializeField] private HomeAreaClick homeClickBlue;
+    [SerializeField] private HomeAreaClick homeClickRed;
+    [SerializeField] private HomeAreaClick homeClickGreen;
+    [SerializeField] private HomeAreaClick homeClickYellow;
+    [SerializeField] private HomeAreaClick homeClickBlue;
 
     [Header("Board Click Area")]
     [SerializeField] private BoardAreaClick boardAreaClick;
@@ -107,6 +107,9 @@ public class GameBootstrapper : MonoBehaviour
     private readonly HashSet<int> _tempDisconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
     private const float BotAutoDelay = 1.5f;
+    private bool _waitingForReconnectState = false;
+    private bool _gamePaused = false;
+    private Coroutine _pauseCountdownCoroutine;
 
     [Header("Pawn Sprites")]
     [SerializeField] private Sprite redPawnSprite;
@@ -198,6 +201,12 @@ public class GameBootstrapper : MonoBehaviour
             _bridge.OnEnterBot += OnNetworkEnterBot;
             _bridge.OnServerTimerExpired += OnServerTimerExpired;
             _bridge.OnServerTimerExpiredDisconnected += OnServerTimerExpiredDisconnected;
+            _bridge.OnIdentified += OnBridgeIdentifiedInGame;
+            _bridge.OnJoinedRoom += OnBridgeJoinedRoomInGame;
+            _bridge.OnGameStateReceived += OnGameStateReceivedForReconnect;
+            _bridge.OnGamePaused += OnGamePaused;
+            _bridge.OnGameResumed += OnGameResumed;
+            _bridge.OnPlayerPermanentlyLeft += OnPlayerPermanentlyLeft;
         }
 
         // Player index + spectator tespiti + initialPlayerCount
@@ -338,6 +347,15 @@ public class GameBootstrapper : MonoBehaviour
         }
 
         HighlightActivePlayerPawns();
+
+        // Reconnect kontrolu: sahne yuklendiginde zaten odadaysak state'i sunucudan iste
+        if (_bridge != null && _bridge.IsInRoom)
+        {
+            _waitingForReconnectState = true;
+            _bridge.RequestGameState();
+            // Restore gelene kadar timer/ses baslatma
+            return;
+        }
 
         // Oyun baslama sesi
         sfx?.PlayGameStart();
@@ -641,10 +659,56 @@ public class GameBootstrapper : MonoBehaviour
 
         if (btnTakeControl != null)
             btnTakeControl.onClick.RemoveListener(OnTakeControlClicked);
+
+        // Reconnect event unsubscribe
+        if (_bridge != null)
+        {
+            _bridge.OnIdentified -= OnBridgeIdentifiedInGame;
+            _bridge.OnJoinedRoom -= OnBridgeJoinedRoomInGame;
+            _bridge.OnGameStateReceived -= OnGameStateReceivedForReconnect;
+            _bridge.OnGamePaused -= OnGamePaused;
+            _bridge.OnGameResumed -= OnGameResumed;
+            _bridge.OnPlayerPermanentlyLeft -= OnPlayerPermanentlyLeft;
+        }
     }
 
-    // Bug 1 fix: Reconnection support - sync state when player joins/rejoins
-    // NOTE: This is now called by bridge reconnection events or can be called manually
+    // ── Reconnect Handlers ──
+
+    private void OnBridgeIdentifiedInGame(IdentifiedPayload data)
+    {
+        if (!data.success) return;
+        if (string.IsNullOrEmpty(data.reconnectRoomCode)) return;
+
+        Debug.Log($"[Reconnect] Re-joining room {data.reconnectRoomCode}");
+        _bridge.JoinRoom(data.reconnectRoomCode);
+    }
+
+    private void OnBridgeJoinedRoomInGame(JoinedRoomPayload payload)
+    {
+        Debug.Log("[Reconnect] Joined room, requesting game state...");
+        _waitingForReconnectState = true;
+        _bridge.RequestGameState();
+    }
+
+    private void OnGameStateReceivedForReconnect(GameStatePayload data)
+    {
+        if (!_waitingForReconnectState) return;
+        _waitingForReconnectState = false;
+
+        // pawnStates bos ise yeni oyun - normal baslangic yap
+        if (string.IsNullOrEmpty(data.pawnStates))
+        {
+            Debug.Log("[Reconnect] No pawn states (fresh game), starting normally...");
+            if (sfx != null) sfx.PlayGameStart();
+            if (!_isSpectator)
+                StartTurnTimer(rollTimeLimit);
+            return;
+        }
+
+        Debug.Log("[Reconnect] Game state received, restoring...");
+        OnJoinedRoom();
+    }
+
     private void OnJoinedRoom()
     {
         // Reconnect sonrasi: disconnect panelini kapat ve oyunu devam ettir
@@ -851,7 +915,6 @@ public class GameBootstrapper : MonoBehaviour
         }
 
         _timerActive = false;
-        _gameOver = true;
 
         if (panelDisconnect != null)
         {
@@ -905,7 +968,13 @@ public class GameBootstrapper : MonoBehaviour
         }
         if (btnReconnect != null)
             btnReconnect.interactable = false;
-        // Socket.IO handles reconnection automatically
+
+        // Socket yok edilmis olabilir (Disconnect cagrildi) - yeniden baglan
+        if (_bridge != null)
+        {
+            string nickname = PlayerPrefs.GetString("PlayerName", "Player");
+            _bridge.Connect(nickname);
+        }
     }
 
     private void OnApplicationPause(bool pauseStatus)
@@ -926,7 +995,7 @@ public class GameBootstrapper : MonoBehaviour
         {
             if (txtDisconnectCountdown != null)
                 _disconnectStatus = DisconnectStatus.ReconnectFailed;
-                txtDisconnectCountdown.text = LocalizationManager.Get("reconnect_failed");
+            txtDisconnectCountdown.text = LocalizationManager.Get("reconnect_failed");
             if (btnReconnect != null)
             {
                 btnReconnect.gameObject.SetActive(true);
@@ -1030,115 +1099,23 @@ public class GameBootstrapper : MonoBehaviour
         if (_gameOver) return;
 
         // ── GECICI KOPUS (isPermanent = false) ──
-        // Piyonlari kaldirma, finishOrder'a ekleme, game over kontrolu yapma
-        // Sadece turunu atla ve reconnect'i bekle
+        // Oyun sunucudan game_paused gelince duracak, burada sadece state guncelle
         if (!payload.isPermanent)
         {
             _tempDisconnectedPlayers.Add(leftPlayerIndex);
             _botPlayers.Remove(leftPlayerIndex);
-            Debug.Log($"[OnBridgePlayerLeft] P{leftPlayerIndex} temporarily disconnected. Waiting for reconnect...");
+            Debug.Log($"[OnBridgePlayerLeft] P{leftPlayerIndex} temporarily disconnected. Game will pause via server event.");
 
             // Stuck state'leri temizle
             _isAnimating = false;
             _isRollingDice = false;
 
-            // Sirasi gelmis oyuncuysa -> turu atla
-            if (_bridge != null && _bridge.IsHost
-                && (_state.CurrentTurnPlayerIndex == leftPlayerIndex
-                    || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)))
-            {
-                AdvanceTurnSkipDisconnected();
-            }
-
-            UpdateScoreboard();
             return;
         }
 
         // ── KALICI AYRILMA (isPermanent = true) ──
-        // 60s doldu veya lobby'den cikti: piyonlari kaldir, game over kontrol et
-
-        // Gecici listeden cikar (onceden eklenmisse)
-        _tempDisconnectedPlayers.Remove(leftPlayerIndex);
-
-        // Oyunu mesru sekilde bitirmis oyuncu mu? (finishOrder'da ama disconnectedPlayers'da degil)
-        bool alreadyLegitimatelyFinished = _finishOrder.Contains(leftPlayerIndex)
-                                           && !_disconnectedPlayers.Contains(leftPlayerIndex);
-
-        // Cikan oyuncuyu henuz siralamada degilse sonuncu yap
-        if (!_finishOrder.Contains(leftPlayerIndex))
-            _finishOrder.Add(leftPlayerIndex);
-
-        // Bug 2 Fix: Mesru finisher'i _disconnectedPlayers'a ekleme -> scoreboard korunsun
-        if (!alreadyLegitimatelyFinished)
-        {
-            _disconnectedPlayers.Add(leftPlayerIndex);
-            _botPlayers.Remove(leftPlayerIndex);
-            // Cikan oyuncunun piyonlarini tahtadan kaldir
-            RemoveDisconnectedPlayerPawns(leftPlayerIndex);
-        }
-        else
-        {
-            Debug.Log($"[OnBridgePlayerLeft] P{leftPlayerIndex} already legitimately finished. Preserving rank.");
-            _botPlayers.Remove(leftPlayerIndex);
-        }
-
-        // Kac aktif (bitmemis) oyuncu kaldi?
-        int totalPlayers = _initialPlayerCount;
-        int remainingPlayers = 0;
-        int lastRemainingIndex = -1;
-        for (int i = 0; i < totalPlayers; i++)
-        {
-            if (!_finishOrder.Contains(i))
-            {
-                remainingPlayers++;
-                lastRemainingIndex = i;
-            }
-        }
-
-        // Sadece 1 kisi kaldiysa -> o 1., oyun biter
-        if (remainingPlayers <= 1 && lastRemainingIndex >= 0)
-        {
-            // Kalan oyuncuyu 1. siraya koy (listenin basina)
-            _finishOrder.Insert(0, lastRemainingIndex);
-            _gameOver = true;
-            if (sfx != null) sfx.PlayWin();
-
-            if (btnRollDice != null)
-                btnRollDice.interactable = false;
-
-            StopTurnTimer();
-            ClearAllHighlights();
-            Debug.Log($"[OnBridgePlayerLeft] Only P{lastRemainingIndex} remains, game over!");
-        }
-
-        // Scoreboard guncelle
-        UpdateScoreboard();
-
-        // State kaydet
-        if (_bridge != null && _bridge.IsHost)
-            _net?.SaveFinishOrder(_finishOrder.ToArray());
-
-        // Stuck state'leri temizle
-        _isAnimating = false;
-        _isRollingDice = false;
-
-        // Oyun devam ediyorsa ve cikan kisinin sirasiysa -> atla
-        if (!_gameOver)
-        {
-            if (_bridge != null && _bridge.IsHost
-                && (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)
-                    || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)))
-            {
-                AdvanceTurnSkipDisconnected();
-            }
-            else if (_bridge == null || !_bridge.IsHost)
-            {
-                // Non-host: Cikan oyuncu siradaki ise, host'un BroadcastTurn gondermesini bekle
-                _isAnimating = false;
-                _isRollingDice = false;
-                Debug.Log($"[OnBridgePlayerLeft] Non-host: cleared stuck flags, waiting for host BroadcastTurn");
-            }
-        }
+        // Sunucu player_permanently_left event'i ile ayri bildirecek, burada sadece log
+        Debug.Log($"[OnBridgePlayerLeft] P{leftPlayerIndex} permanent leave received. Handled by OnPlayerPermanentlyLeft.");
     }
 
     /// <summary>
@@ -1152,6 +1129,144 @@ public class GameBootstrapper : MonoBehaviour
             _tempDisconnectedPlayers.Remove(playerIndex);
             Debug.Log($"[OnBridgePlayerJoined] P{playerIndex} ({payload.nickname}) reconnected!");
             UpdateScoreboard();
+        }
+    }
+
+    // ==================== GAME PAUSE/RESUME (DISCONNECT) ====================
+
+    private void OnGamePaused(GamePausedPayload data)
+    {
+        if (_gameOver) return;
+        _gamePaused = true;
+        _paused = true; // Tum input'lari engelle
+
+        Debug.Log($"[OnGamePaused] Game paused - waiting for P{data.disconnectedPlayerIndex} ({data.disconnectedNickname}), timeout={data.timeoutSeconds}s");
+
+        // Timer'i durdur
+        StopTurnTimer();
+
+        // Zar ve animasyonlari durdur
+        if (btnRollDice != null) btnRollDice.interactable = false;
+        ClearAllHighlights();
+
+        // Disconnect panelini goster - bekleme mesaji ile
+        if (panelDisconnect != null)
+        {
+            panelDisconnect.SetActive(true);
+            if (txtDisconnectMessage != null)
+                txtDisconnectMessage.text = $"{data.disconnectedNickname} {LocalizationManager.Get("disconnected")}";
+            if (btnReconnect != null)
+                btnReconnect.gameObject.SetActive(false);
+            if (btnDisconnectMainMenu != null)
+                btnDisconnectMainMenu.gameObject.SetActive(true);
+        }
+
+        // Geri sayim baslat
+        if (_pauseCountdownCoroutine != null) StopCoroutine(_pauseCountdownCoroutine);
+        _pauseCountdownCoroutine = StartCoroutine(PauseCountdown(data.timeoutSeconds));
+    }
+
+    private IEnumerator PauseCountdown(int totalSeconds)
+    {
+        float timeLeft = totalSeconds;
+        var wait = new WaitForSeconds(1f);
+
+        while (timeLeft > 0 && _gamePaused)
+        {
+            if (txtDisconnectCountdown != null)
+                txtDisconnectCountdown.text = $"{Mathf.CeilToInt(timeLeft)}s";
+
+            yield return wait;
+            timeLeft -= 1f;
+        }
+    }
+
+    private void OnGameResumed(GameResumedPayload data)
+    {
+        Debug.Log($"[OnGameResumed] Game resumed - reason={data.reason}, playerIndex={data.playerIndex}");
+        _gamePaused = false;
+        _paused = false; // Input'lari tekrar ac
+
+        // Countdown coroutine'i durdur
+        if (_pauseCountdownCoroutine != null)
+        {
+            StopCoroutine(_pauseCountdownCoroutine);
+            _pauseCountdownCoroutine = null;
+        }
+
+        // Disconnect panelini kapat
+        if (panelDisconnect != null)
+            panelDisconnect.SetActive(false);
+
+        // Oyun devam ediyor - sira kimdeyse timer baslasin
+        if (!_gameOver && _bridge != null && _bridge.IsHost)
+        {
+            float limit = (_phase == TurnPhase.AwaitRoll) ? rollTimeLimit : moveTimeLimit;
+            StartTurnTimer(limit);
+        }
+    }
+
+    private void OnPlayerPermanentlyLeft(PlayerPermanentlyLeftPayload data)
+    {
+        int leftPlayerIndex = data.playerIndex;
+        Debug.Log($"[OnPlayerPermanentlyLeft] P{leftPlayerIndex} permanently removed (timeout)");
+
+        if (_gameOver) return;
+
+        _tempDisconnectedPlayers.Remove(leftPlayerIndex);
+
+        bool alreadyLegitimatelyFinished = _finishOrder.Contains(leftPlayerIndex)
+                                           && !_disconnectedPlayers.Contains(leftPlayerIndex);
+
+        if (!_finishOrder.Contains(leftPlayerIndex))
+            _finishOrder.Add(leftPlayerIndex);
+
+        if (!alreadyLegitimatelyFinished)
+        {
+            _disconnectedPlayers.Add(leftPlayerIndex);
+            _botPlayers.Remove(leftPlayerIndex);
+            RemoveDisconnectedPlayerPawns(leftPlayerIndex);
+        }
+        else
+        {
+            _botPlayers.Remove(leftPlayerIndex);
+        }
+
+        // Kac aktif oyuncu kaldi?
+        int remainingPlayers = 0;
+        int lastRemainingIndex = -1;
+        for (int i = 0; i < _initialPlayerCount; i++)
+        {
+            if (!_finishOrder.Contains(i))
+            {
+                remainingPlayers++;
+                lastRemainingIndex = i;
+            }
+        }
+
+        if (remainingPlayers <= 1 && lastRemainingIndex >= 0)
+        {
+            _finishOrder.Insert(0, lastRemainingIndex);
+            _gameOver = true;
+            if (sfx != null) sfx.PlayWin();
+            if (btnRollDice != null) btnRollDice.interactable = false;
+            StopTurnTimer();
+            ClearAllHighlights();
+        }
+
+        UpdateScoreboard();
+
+        if (_bridge != null && _bridge.IsHost)
+            _net?.SaveFinishOrder(_finishOrder.ToArray());
+
+        // Oyun devam ediyorsa ve cikan kisinin sirasiysa -> atla
+        if (!_gameOver && _bridge != null && _bridge.IsHost)
+        {
+            if (_disconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex)
+                || _tempDisconnectedPlayers.Contains(_state.CurrentTurnPlayerIndex))
+            {
+                AdvanceTurnSkipDisconnected();
+            }
         }
     }
 
@@ -1308,113 +1423,113 @@ public class GameBootstrapper : MonoBehaviour
 
         yield return new WaitForSeconds(0.5f); // Wait for players to see the result
 
-    int turn2 = _state.CurrentTurnPlayerIndex;
+        int turn2 = _state.CurrentTurnPlayerIndex;
 
-    // 3 ARDISIK 6 KONTROLU - EN ONCE!
-    if (_consecutiveSixes >= 3)
-    {
-        Debug.Log($"[CoRollDiceAnimated] 3 consecutive sixes! Penalty for P{turn2}");
-
-        _consecutiveSixes = 0;
-
-        if (_bridge != null && _bridge.IsInRoom)
+        // 3 ARDISIK 6 KONTROLU - EN ONCE!
+        if (_consecutiveSixes >= 3)
         {
-            if (_bridge.IsHost)
+            Debug.Log($"[CoRollDiceAnimated] 3 consecutive sixes! Penalty for P{turn2}");
+
+            _consecutiveSixes = 0;
+
+            if (_bridge != null && _bridge.IsInRoom)
+            {
+                if (_bridge.IsHost)
+                {
+                    _extraTurnsEarned = 0;
+                    AdvanceTurnInternalOnly();
+                }
+                else
+                {
+                    _currentRoll = -1;
+                    hudView.SetDice(-1);
+                    _net?.RequestAdvanceTurn();
+                    if (btnRollDice != null)
+                    {
+                        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+                        btnRollDice.interactable = isMyTurn && !_gameOver;
+                    }
+                }
+            }
+            else
             {
                 _extraTurnsEarned = 0;
                 AdvanceTurnInternalOnly();
             }
-            else
+
+            yield break;
+        }
+
+        var legal = GetLegalMoves(turn2, roll);
+
+        if (legal.Count == 0)
+        {
+            Debug.Log($"[CoRollDiceAnimated] No legal moves for P{turn2}");
+
+            if (_bridge != null && _bridge.IsInRoom)
             {
-                _currentRoll = -1;
-                hudView.SetDice(-1);
-                _net?.RequestAdvanceTurn();
-                if (btnRollDice != null)
+                if (_bridge.IsHost)
                 {
-                    bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                    btnRollDice.interactable = isMyTurn && !_gameOver;
+                    if (_extraTurnsEarned > 0)
+                    {
+                        _extraTurnsEarned--;
+                        _currentRoll = -1;
+                        hudView.SetDice(-1);
+                        _net.BroadcastTurn(_state.CurrentTurnPlayerIndex);
+                    }
+                    else
+                    {
+                        AdvanceTurnInternalOnly();
+                    }
+                }
+                else
+                {
+                    _currentRoll = -1;
+                    hudView.SetDice(-1);
+                    _net?.RequestAdvanceTurn();
+                    if (btnRollDice != null)
+                    {
+                        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+                        btnRollDice.interactable = isMyTurn && !_gameOver;
+                    }
                 }
             }
-        }
-        else
-        {
-            _extraTurnsEarned = 0;
-            AdvanceTurnInternalOnly();
-        }
-
-        yield break;
-    }
-
-    var legal = GetLegalMoves(turn2, roll);
-
-    if (legal.Count == 0)
-    {
-        Debug.Log($"[CoRollDiceAnimated] No legal moves for P{turn2}");
-
-        if (_bridge != null && _bridge.IsInRoom)
-        {
-            if (_bridge.IsHost)
+            else
             {
                 if (_extraTurnsEarned > 0)
                 {
                     _extraTurnsEarned--;
                     _currentRoll = -1;
                     hudView.SetDice(-1);
-                    _net.BroadcastTurn(_state.CurrentTurnPlayerIndex);
+                    if (btnRollDice != null)
+                        btnRollDice.interactable = !_isSpectator && !_gameOver
+                            && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
+                    HighlightActivePlayerPawns();
                 }
                 else
                 {
                     AdvanceTurnInternalOnly();
                 }
             }
-            else
-            {
-                _currentRoll = -1;
-                hudView.SetDice(-1);
-                _net?.RequestAdvanceTurn();
-                if (btnRollDice != null)
-                {
-                    bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                    btnRollDice.interactable = isMyTurn && !_gameOver;
-                }
-            }
+
+            yield break;
         }
-        else
+
+        if (legal.Count == 1)
         {
-            if (_extraTurnsEarned > 0)
-            {
-                _extraTurnsEarned--;
-                _currentRoll = -1;
-                hudView.SetDice(-1);
-                if (btnRollDice != null)
-                    btnRollDice.interactable = !_isSpectator && !_gameOver
-                        && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                HighlightActivePlayerPawns();
-            }
-            else
-            {
-                AdvanceTurnInternalOnly();
-            }
+            Debug.Log($"[CoRollDiceAnimated] Single legal move, auto-moving");
+            int pawnId = _pawnToId[legal[0]];
+            _net?.SendMoveRequest(turn2, pawnId, roll);
+            yield break;
         }
 
-        yield break;
+        HighlightLegalMoves(legal);
+        SetOnlyLegalClickable(legal);
+        _phase = TurnPhase.AwaitMove;
+
+        // Piyon secim timer'i baslat
+        StartTurnTimer(moveTimeLimit);
     }
-
-    if (legal.Count == 1)
-    {
-        Debug.Log($"[CoRollDiceAnimated] Single legal move, auto-moving");
-        int pawnId = _pawnToId[legal[0]];
-        _net?.SendMoveRequest(turn2, pawnId, roll);
-        yield break;
-    }
-
-    HighlightLegalMoves(legal);
-    SetOnlyLegalClickable(legal);
-    _phase = TurnPhase.AwaitMove;
-
-    // Piyon secim timer'i baslat
-    StartTurnTimer(moveTimeLimit);
-}
 
 
     private void OnPawnClicked(PawnView pawn)
@@ -1488,103 +1603,102 @@ public class GameBootstrapper : MonoBehaviour
         // Host hamleyi broadcast eder with moveId
         _net.BroadcastMove(playerIndex, pawnId, _currentRoll, moveId);
 
-        // Bug 1 fix: Persist state after move validation
+        // State sync (pawn states FinishMove'da kaydedilecek - hamle uygulandiktan sonra)
         _net.SyncGameState(_state.CurrentTurnPlayerIndex, _currentRoll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
-        SerializeAndSavePawnStates();
     }
 
     private void OnNetworkRoll(int playerIndex, int roll)
-{
-    Debug.Log($"[OnNetworkRoll] P{playerIndex} rolled {roll}, LocalPlayer={_localPlayerIndex}");
-
-    // Timer'i HERKESTE durdur (senkronizasyon duzeltmesi)
-    StopTurnTimer();
-
-    if (roll == 6)
     {
-        _consecutiveSixes++;
-        Debug.Log($"[OnNetworkRoll] Consecutive sixes: {_consecutiveSixes}");
+        Debug.Log($"[OnNetworkRoll] P{playerIndex} rolled {roll}, LocalPlayer={_localPlayerIndex}");
 
-        if (_consecutiveSixes >= 3)
+        // Timer'i HERKESTE durdur (senkronizasyon duzeltmesi)
+        StopTurnTimer();
+
+        if (roll == 6)
         {
-            Debug.Log($"[OnNetworkRoll] 3 consecutive sixes! Penalty for P{playerIndex}");
+            _consecutiveSixes++;
+            Debug.Log($"[OnNetworkRoll] Consecutive sixes: {_consecutiveSixes}");
 
-            if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
+            if (_consecutiveSixes >= 3)
             {
-                _extraTurnsEarned = 0;
+                Debug.Log($"[OnNetworkRoll] 3 consecutive sixes! Penalty for P{playerIndex}");
+
+                if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
+                {
+                    _extraTurnsEarned = 0;
+                }
+            }
+            else
+            {
+                if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
+                {
+                    // Sadece evde veya main path'te piyon varsa extra turn ver
+                    if (HasPawnOutsideHomeLane(playerIndex))
+                    {
+                        _extraTurnsEarned++;
+                        Debug.Log($"[OnNetworkRoll] Extra turns: {_extraTurnsEarned}");
+                    }
+                    else
+                    {
+                        Debug.Log($"[OnNetworkRoll] 6 rolled but all pawns in home lane, no extra turn");
+                    }
+                }
             }
         }
         else
         {
-            if (!(_bridge != null && _bridge.IsInRoom) || (_bridge != null && _bridge.IsHost))
+            _consecutiveSixes = 0;
+        }
+
+        // Zar ve UI'i TUM oyuncular icin guncelle
+        _currentRoll = roll;
+        hudView.SetTurn(TurnName(playerIndex), playerIndex, _localPlayerIndex);
+
+        // Cift zar atmayi engelle
+        if (btnRollDice != null)
+            btnRollDice.interactable = false;
+
+        // If we are not the one who initiated the local roll, play animation
+        bool amIRollingLocally = (playerIndex == _localPlayerIndex && _isRollingDice);
+
+        if (!amIRollingLocally)
+        {
+            // Cancel any existing remote animation to prevent overlap/desync
+            StopCoroutine("CoRemoteDiceAnimation");
+            StartCoroutine(CoRemoteDiceAnimation(playerIndex, roll));
+        }
+
+        // Eger Host degilsek ve sira bizdeyse, ama biz atmadiysa (Timeout vs)
+        if (playerIndex == _localPlayerIndex && !amIRollingLocally && _consecutiveSixes < 3)
+        {
+            // Logic handled in CoRemoteDiceAnimation
+        }
+
+        // Host: uzak oyuncu icin hamle timer'i baslat
+        if (_bridge != null && _bridge.IsInRoom && _bridge.IsHost && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
+        {
+            // Add delay for animation
+            if (_timerDelayCoroutine != null) StopCoroutine(_timerDelayCoroutine);
+            _timerDelayCoroutine = StartCoroutine(StartTimerAfterDelay(diceRollDuration + 0.5f, playerIndex, roll));
+        }
+    }
+
+    private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
+    {
+        yield return new WaitForSeconds(delay);
+        _timerDelayCoroutine = null; // Coroutine bitti, ref temizle
+
+        // Check if state is still valid
+        if (_state.CurrentTurnPlayerIndex == playerIndex && _currentRoll == roll)
+        {
+            var legal = GetLegalMoves(playerIndex, roll);
+            if (legal.Count > 1)
             {
-                // Sadece evde veya main path'te piyon varsa extra turn ver
-                if (HasPawnOutsideHomeLane(playerIndex))
-                {
-                    _extraTurnsEarned++;
-                    Debug.Log($"[OnNetworkRoll] Extra turns: {_extraTurnsEarned}");
-                }
-                else
-                {
-                    Debug.Log($"[OnNetworkRoll] 6 rolled but all pawns in home lane, no extra turn");
-                }
+                _phase = TurnPhase.AwaitMove;
+                StartTurnTimer(moveTimeLimit);
+                Debug.Log($"[StartTimerAfterDelay] Host: starting move timer for P{playerIndex}");
             }
         }
-    }
-    else
-    {
-        _consecutiveSixes = 0;
-    }
-
-    // Zar ve UI'i TUM oyuncular icin guncelle
-    _currentRoll = roll;
-    hudView.SetTurn(TurnName(playerIndex), playerIndex, _localPlayerIndex);
-
-    // Cift zar atmayi engelle
-    if (btnRollDice != null)
-        btnRollDice.interactable = false;
-
-    // If we are not the one who initiated the local roll, play animation
-    bool amIRollingLocally = (playerIndex == _localPlayerIndex && _isRollingDice);
-
-    if (!amIRollingLocally)
-    {
-        // Cancel any existing remote animation to prevent overlap/desync
-        StopCoroutine("CoRemoteDiceAnimation");
-        StartCoroutine(CoRemoteDiceAnimation(playerIndex, roll));
-    }
-
-    // Eger Host degilsek ve sira bizdeyse, ama biz atmadiysa (Timeout vs)
-    if (playerIndex == _localPlayerIndex && !amIRollingLocally && _consecutiveSixes < 3)
-    {
-         // Logic handled in CoRemoteDiceAnimation
-    }
-
-    // Host: uzak oyuncu icin hamle timer'i baslat
-    if (_bridge != null && _bridge.IsInRoom && _bridge.IsHost && playerIndex != _localPlayerIndex && _consecutiveSixes < 3)
-    {
-        // Add delay for animation
-        if (_timerDelayCoroutine != null) StopCoroutine(_timerDelayCoroutine);
-        _timerDelayCoroutine = StartCoroutine(StartTimerAfterDelay(diceRollDuration + 0.5f, playerIndex, roll));
-    }
-}
-
-private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
-{
-    yield return new WaitForSeconds(delay);
-    _timerDelayCoroutine = null; // Coroutine bitti, ref temizle
-
-    // Check if state is still valid
-    if (_state.CurrentTurnPlayerIndex == playerIndex && _currentRoll == roll)
-    {
-        var legal = GetLegalMoves(playerIndex, roll);
-        if (legal.Count > 1)
-        {
-            _phase = TurnPhase.AwaitMove;
-            StartTurnTimer(moveTimeLimit);
-            Debug.Log($"[StartTimerAfterDelay] Host: starting move timer for P{playerIndex}");
-        }
-    }
     }
 
     // Uzaktan gelen zar atisi icin gorsel animasyon
@@ -1654,57 +1768,46 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     }
 
     private void OnNetworkTurn(int nextPlayerIndex)
-{
-    Debug.Log($"[RPC RECEIVED] Turn: Now P{nextPlayerIndex} ({TurnName(nextPlayerIndex)})");
-
-    // FIX: Animasyon flag'lerini sifirla (host animasyonu client'tan once bitebilir, race condition)
-    _isAnimating = false;
-
-    // Gercek sira degisimi mi, yoksa extra turn mi?
-    if (nextPlayerIndex != _state.CurrentTurnPlayerIndex)
     {
-        _consecutiveSixes = 0; // Sira degisti, sifirla
-    }
+        Debug.Log($"[RPC RECEIVED] Turn: Now P{nextPlayerIndex} ({TurnName(nextPlayerIndex)})");
 
-    _state.CurrentTurnPlayerIndex = nextPlayerIndex;
-    _phase = TurnPhase.AwaitRoll;
-    _isRollingDice = false;
-    _currentRoll = -1;
+        // FIX: Animasyon flag'lerini sifirla (host animasyonu client'tan once bitebilir, race condition)
+        _isAnimating = false;
 
-    hudView.SetDice(-1);
-    hudView.SetTurn(TurnName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
+        // Gercek sira degisimi mi, yoksa extra turn mi?
+        if (nextPlayerIndex != _state.CurrentTurnPlayerIndex)
+        {
+            _consecutiveSixes = 0; // Sira degisti, sifirla
+        }
 
-    if (btnRollDice != null)
-    {
-        bool isMyTurn = (nextPlayerIndex == _localPlayerIndex);
-        btnRollDice.interactable = isMyTurn && !_gameOver;
-    }
-    // Sira sende ise ses cal + titresim
-    if (nextPlayerIndex == _localPlayerIndex && !_gameOver)
-    {
-        sfx?.PlayYourTurn();
+        _state.CurrentTurnPlayerIndex = nextPlayerIndex;
+        _phase = TurnPhase.AwaitRoll;
+        _isRollingDice = false;
+        _currentRoll = -1;
 
-        // Mobilde titresim (Android)
-        #if UNITY_ANDROID && !UNITY_EDITOR
+        hudView.SetDice(-1);
+        hudView.SetTurn(TurnName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
+
+        if (btnRollDice != null)
+        {
+            bool isMyTurn = (nextPlayerIndex == _localPlayerIndex);
+            btnRollDice.interactable = isMyTurn && !_gameOver;
+        }
+        // Sira sende ise ses cal + titresim
+        if (nextPlayerIndex == _localPlayerIndex && !_gameOver)
+        {
+            sfx?.PlayYourTurn();
+
+            // Mobilde titresim (Android)
+#if UNITY_ANDROID && !UNITY_EDITOR
         Handheld.Vibrate();
-        #endif
-    }
-    HighlightActivePlayerPawns();
+#endif
+        }
+        HighlightActivePlayerPawns();
 
-    // Zar atma timer'i baslat
-    StartTurnTimer(rollTimeLimit);
+        // Zar atma timer'i baslat
+        StartTurnTimer(rollTimeLimit);
 
-    // FIX: Client'lar her sira degisiminde host state'ini dogrula (desync onleme)
-    if (_bridge != null && !_bridge.IsHost && _bridge.IsInRoom)
-    {
-        StartCoroutine(VerifyPawnStatesAfterDelay(0.5f));
-    }
-}
-
-    private IEnumerator VerifyPawnStatesAfterDelay(float delay)
-    {
-        yield return new WaitForSeconds(delay);
-        RestorePawnStatesFromNetwork();
     }
 
     // ========== TIMER NETWORK HANDLERS (Fix 1) ==========
@@ -1736,6 +1839,10 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         // ==================== ONLINE ====================
         if (_bridge != null && _bridge.IsInRoom)
         {
+            // Hamle uygulandiktan sonra pawn state'leri kaydet
+            if (_bridge.IsHost)
+                SerializeAndSavePawnStates();
+
             if (_bridge.IsHost)
             {
                 // Bitiren oyuncuya extra turn verme
@@ -2224,7 +2331,9 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         {
             _isLeavingToMainMenu = true;
             _isIntentionalDisconnect = true;
-            _bridge.LeaveRoom(true);
+            // leave_room gondermiyoruz - sadece disconnect olacak
+            // Sunucunun disconnect handler'i otomatik 60s reconnect penceresi baslatir
+            _bridge.Disconnect();
             SceneManager.LoadScene(0);
             return;
         }
@@ -2424,28 +2533,28 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         }
 
         // ==================== HOME LANE ====================
-         if (st.IsInHomeLane)
-    {
-        if (st.HomeIndex + roll > 5)
+        if (st.IsInHomeLane)
         {
-            _isAnimating = false;
-            return;
-        }
+            if (st.HomeIndex + roll > 5)
+            {
+                _isAnimating = false;
+                return;
+            }
 
-        var homePath = GetHomePath(playerIndex);
-        int fromHome = st.HomeIndex;
-        int newHomeIndex = fromHome + roll;
+            var homePath = GetHomePath(playerIndex);
+            int fromHome = st.HomeIndex;
+            int newHomeIndex = fromHome + roll;
 
-        // Eski home lane pozisyonundan unregister
-        int oldKey = GetHomeLaneKey(playerIndex, fromHome);
-        if (_pawnCurrentWaypoint.ContainsKey(pawn))
-            positionManager?.UnregisterPawnFromWaypoint(pawn, oldKey);
+            // Eski home lane pozisyonundan unregister
+            int oldKey = GetHomeLaneKey(playerIndex, fromHome);
+            if (_pawnCurrentWaypoint.ContainsKey(pawn))
+                positionManager?.UnregisterPawnFromWaypoint(pawn, oldKey);
 
-        var positions = new List<Vector3>();
-        for (int i = fromHome + 1; i <= newHomeIndex; i++)
-            positions.Add(homePath[i].position);
+            var positions = new List<Vector3>();
+            for (int i = fromHome + 1; i <= newHomeIndex; i++)
+                positions.Add(homePath[i].position);
 
-        st.AdvanceHome(roll);
+            st.AdvanceHome(roll);
 
             if (newHomeIndex == 5)
             {
@@ -2755,6 +2864,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     // Sunucu timer suresi doldu - connected oyuncu icin
     private void OnServerTimerExpired(int playerIndex)
     {
+        if (_gamePaused) return; // Oyun duraklatildiysa bot baslatma
         if (playerIndex != _localPlayerIndex) return;
         if (_isSpectator) return;
 
@@ -2774,11 +2884,13 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
     // Sunucu timer suresi doldu - disconnected oyuncu icin (HOST alir)
     private void OnServerTimerExpiredDisconnected(int playerIndex)
     {
+        if (_gamePaused) return; // Oyun duraklatildiysa bot baslatma
         if (_bridge == null || !_bridge.IsHost) return;
         if (!_tempDisconnectedPlayers.Contains(playerIndex)) return;
 
         Debug.Log($"[Timer] Server says timer expired for disconnected P{playerIndex}");
         _botPlayers.Add(playerIndex);
+        _bridge.SendEnterBot(playerIndex); // Sunucuya bildir - sonraki turlar 1.5s olsun
 
         if (_phase == TurnPhase.AwaitRoll) AutoRollDice();
         else if (_phase == TurnPhase.AwaitMove) AutoMovePawn();
@@ -2786,6 +2898,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void AutoRollDice()
     {
+        if (_gamePaused) return;
         if (_isRollingDice || _isAnimating) return;
         Debug.Log($"[Timer] Auto-rolling dice for P{_state.CurrentTurnPlayerIndex}");
         StartCoroutine(CoRollDiceAnimated());
@@ -2793,6 +2906,7 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
 
     private void AutoMovePawn()
     {
+        if (_gamePaused) return;
         if (_isAnimating || _isRollingDice) return;
         int turn = _state.CurrentTurnPlayerIndex;
         var legal = GetLegalMoves(turn, _currentRoll);
@@ -2804,99 +2918,99 @@ private IEnumerator StartTimerAfterDelay(float delay, int playerIndex, int roll)
         Debug.Log($"[Timer] Auto-moving pawn {pawnId} for P{turn}");
         _net?.SendMoveRequest(turn, pawnId, _currentRoll);
     }
-private int GetHomeLaneKey(int playerIndex, int homeIndex)
-{
-    return PawnPositionManager.GetHomeLaneKey(playerIndex, homeIndex);
-}
-
-/// <summary>
-/// Oyuncunun evde veya main path'te piyonu var mi?
-/// (Home lane ve finished haric)
-/// </summary>
-private bool HasPawnOutsideHomeLane(int playerIndex)
-{
-    var pawns = GetPawnsForTurn(playerIndex);
-    foreach (var p in pawns)
+    private int GetHomeLaneKey(int playerIndex, int homeIndex)
     {
-        var st = _pawnStates[p];
-        if (st.IsAtHome) return true;      // Evde piyon var, 6 ile cikabilir
-        if (!st.IsInHomeLane && !st.IsFinished) return true; // Main path'te piyon var
+        return PawnPositionManager.GetHomeLaneKey(playerIndex, homeIndex);
     }
-    return false; // Hepsi home lane'de veya bitmis
-}
 
-private void OnHomeAreaClicked(int playerIndex)
-{
-    if (_paused) return;
-    if (_gameOver) return;
-    if (_currentRoll < 1) return;
-
-    // Sadece kendi siran ve kendi rengin
-    int turn = _state.CurrentTurnPlayerIndex;
-    if (turn != _localPlayerIndex) return;
-    if (turn != playerIndex) return;
-
-    // 6 degilse evden cikamaz
-    if (_currentRoll != 6) return;
-
-    // AwaitMove fazinda olmali
-    if (_phase != TurnPhase.AwaitMove) return;
-
-    // Evdeki ilk legal piyonu bul
-    var pawns = GetPawnsForTurn(playerIndex);
-    PawnView homePawn = null;
-
-    foreach (var p in pawns)
+    /// <summary>
+    /// Oyuncunun evde veya main path'te piyonu var mi?
+    /// (Home lane ve finished haric)
+    /// </summary>
+    private bool HasPawnOutsideHomeLane(int playerIndex)
     {
-        if (_pawnStates[p].IsAtHome)
+        var pawns = GetPawnsForTurn(playerIndex);
+        foreach (var p in pawns)
         {
-            homePawn = p;
-            break;
+            var st = _pawnStates[p];
+            if (st.IsAtHome) return true;      // Evde piyon var, 6 ile cikabilir
+            if (!st.IsInHomeLane && !st.IsFinished) return true; // Main path'te piyon var
+        }
+        return false; // Hepsi home lane'de veya bitmis
+    }
+
+    private void OnHomeAreaClicked(int playerIndex)
+    {
+        if (_paused) return;
+        if (_gameOver) return;
+        if (_currentRoll < 1) return;
+
+        // Sadece kendi siran ve kendi rengin
+        int turn = _state.CurrentTurnPlayerIndex;
+        if (turn != _localPlayerIndex) return;
+        if (turn != playerIndex) return;
+
+        // 6 degilse evden cikamaz
+        if (_currentRoll != 6) return;
+
+        // AwaitMove fazinda olmali
+        if (_phase != TurnPhase.AwaitMove) return;
+
+        // Evdeki ilk legal piyonu bul
+        var pawns = GetPawnsForTurn(playerIndex);
+        PawnView homePawn = null;
+
+        foreach (var p in pawns)
+        {
+            if (_pawnStates[p].IsAtHome)
+            {
+                homePawn = p;
+                break;
+            }
+        }
+
+        if (homePawn == null) return;
+
+        // Legal mi kontrol et
+        var legal = GetLegalMoves(turn, _currentRoll);
+        if (!legal.Contains(homePawn)) return;
+
+        // Hamleyi gonder
+        int pawnId = _pawnToId[homePawn];
+        _net?.SendMoveRequest(turn, pawnId, _currentRoll);
+    }
+
+    private void OnBoardAreaClicked(Vector2 screenPos)
+    {
+        if (_paused || _gameOver || _phase != TurnPhase.AwaitMove) return;
+        if (_currentRoll < 1 || _isAnimating) return;
+        if (_state.CurrentTurnPlayerIndex != _localPlayerIndex) return;
+
+        var legal = GetLegalMoves(_state.CurrentTurnPlayerIndex, _currentRoll);
+        if (legal.Count == 0) return;
+
+        // En yakin legal piyonu bul (evdekiler haric - HomeAreaClick hallediyor)
+        PawnView nearest = null;
+        float minDist = float.MaxValue;
+
+        foreach (var pawn in legal)
+        {
+            if (_pawnStates[pawn].IsAtHome) continue;
+            Vector2 pawnScreenPos = RectTransformUtility.WorldToScreenPoint(null, pawn.transform.position);
+            float dist = Vector2.Distance(screenPos, pawnScreenPos);
+            if (dist < minDist)
+            {
+                minDist = dist;
+                nearest = pawn;
+            }
+        }
+
+        float maxDist = Screen.height * 0.08f;
+        if (nearest != null && minDist < maxDist)
+        {
+            OnPawnClicked(nearest);
         }
     }
-
-    if (homePawn == null) return;
-
-    // Legal mi kontrol et
-    var legal = GetLegalMoves(turn, _currentRoll);
-    if (!legal.Contains(homePawn)) return;
-
-    // Hamleyi gonder
-    int pawnId = _pawnToId[homePawn];
-    _net?.SendMoveRequest(turn, pawnId, _currentRoll);
-}
-
-private void OnBoardAreaClicked(Vector2 screenPos)
-{
-    if (_paused || _gameOver || _phase != TurnPhase.AwaitMove) return;
-    if (_currentRoll < 1 || _isAnimating) return;
-    if (_state.CurrentTurnPlayerIndex != _localPlayerIndex) return;
-
-    var legal = GetLegalMoves(_state.CurrentTurnPlayerIndex, _currentRoll);
-    if (legal.Count == 0) return;
-
-    // En yakin legal piyonu bul (evdekiler haric - HomeAreaClick hallediyor)
-    PawnView nearest = null;
-    float minDist = float.MaxValue;
-
-    foreach (var pawn in legal)
-    {
-        if (_pawnStates[pawn].IsAtHome) continue;
-        Vector2 pawnScreenPos = RectTransformUtility.WorldToScreenPoint(null, pawn.transform.position);
-        float dist = Vector2.Distance(screenPos, pawnScreenPos);
-        if (dist < minDist)
-        {
-            minDist = dist;
-            nearest = pawn;
-        }
-    }
-
-    float maxDist = Screen.height * 0.08f;
-    if (nearest != null && minDist < maxDist)
-    {
-        OnPawnClicked(nearest);
-    }
-}
 
     // ========== BUG 1 FIX: PAWN STATE SERIALIZATION METHODS ==========
 

@@ -24,6 +24,9 @@ namespace LudoFriends.Networking
         public event Action<int> OnEnterBot;
         public event Action<int> OnServerTimerExpired;
         public event Action<int> OnServerTimerExpiredDisconnected;
+        public event Action<GamePausedPayload> OnGamePaused;
+        public event Action<GameResumedPayload> OnGameResumed;
+        public event Action<PlayerPermanentlyLeftPayload> OnPlayerPermanentlyLeft;
 
         // ── Lobby/Room Events (for LobbyManager & GameBootstrapper) ──
         public event Action<JoinedRoomPayload> OnJoinedRoom;
@@ -336,6 +339,24 @@ namespace LudoFriends.Networking
             {
                 var data = response.GetValue<ServerTimerExpiredPayload>();
                 OnServerTimerExpiredDisconnected?.Invoke(data.playerIndex);
+            });
+
+            _socket.OnUnityThread("game_paused", response =>
+            {
+                var data = response.GetValue<GamePausedPayload>();
+                OnGamePaused?.Invoke(data);
+            });
+
+            _socket.OnUnityThread("game_resumed", response =>
+            {
+                var data = response.GetValue<GameResumedPayload>();
+                OnGameResumed?.Invoke(data);
+            });
+
+            _socket.OnUnityThread("player_permanently_left", response =>
+            {
+                var data = response.GetValue<PlayerPermanentlyLeftPayload>();
+                OnPlayerPermanentlyLeft?.Invoke(data);
             });
 
             _socket.OnUnityThread("timer_start", response =>

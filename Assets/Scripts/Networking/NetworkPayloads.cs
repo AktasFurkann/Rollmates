@@ -179,4 +179,28 @@ namespace LudoFriends.Networking
     {
         public double time;
     }
+
+    // ── Game Pause/Resume ──
+
+    [Serializable]
+    public class GamePausedPayload
+    {
+        public int disconnectedPlayerIndex;
+        public string disconnectedNickname;
+        public int timeoutSeconds;
+    }
+
+    [Serializable]
+    public class GameResumedPayload
+    {
+        public string reason; // "reconnected" or "timeout"
+        public int playerIndex;
+    }
+
+    [Serializable]
+    public class PlayerPermanentlyLeftPayload
+    {
+        public string playerId;
+        public int playerIndex;
+    }
 }
