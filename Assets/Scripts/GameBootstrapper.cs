@@ -718,7 +718,11 @@ public class GameBootstrapper : MonoBehaviour
             _reconnectCoroutine = null;
         }
         if (panelDisconnect != null) panelDisconnect.SetActive(false);
-        if (btnReconnect != null) btnReconnect.gameObject.SetActive(false);
+        if (btnReconnect != null)
+        {
+            btnReconnect.gameObject.SetActive(false);
+            btnReconnect.interactable = true; // Sonraki disconnect icin hazir tut
+        }
 
         // Spectator tespiti
         if (!_isSpectator && _bridge != null && _bridge.IsInRoom)
@@ -925,7 +929,10 @@ public class GameBootstrapper : MonoBehaviour
                 txtDisconnectMessage.text = LocalizationManager.Get("disconnected");
             }
             if (btnReconnect != null)
+            {
                 btnReconnect.gameObject.SetActive(true);
+                btnReconnect.interactable = true;
+            }
         }
 
         _reconnectCoroutine = StartCoroutine(ReconnectCountdown());
@@ -1445,10 +1452,7 @@ public class GameBootstrapper : MonoBehaviour
                     hudView.SetDice(-1);
                     _net?.RequestAdvanceTurn();
                     if (btnRollDice != null)
-                    {
-                        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                        btnRollDice.interactable = isMyTurn && !_gameOver;
-                    }
+                        btnRollDice.interactable = false;
                 }
             }
             else
@@ -1488,10 +1492,7 @@ public class GameBootstrapper : MonoBehaviour
                     hudView.SetDice(-1);
                     _net?.RequestAdvanceTurn();
                     if (btnRollDice != null)
-                    {
-                        bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                        btnRollDice.interactable = isMyTurn && !_gameOver;
-                    }
+                        btnRollDice.interactable = false;
                 }
             }
             else
@@ -1869,7 +1870,7 @@ public class GameBootstrapper : MonoBehaviour
             }
             else
             {
-                // Client: UI temizle, ama butonu koru korune kapatma
+                // Client: UI temizle, butonu kapat - sira geldiginde OnNetworkTurn acacak
                 _currentRoll = -1;
                 hudView.SetDice(-1);
 
@@ -1877,13 +1878,8 @@ public class GameBootstrapper : MonoBehaviour
                 if (_finishOrder.Contains(_localPlayerIndex))
                     _extraTurnsEarned = 0;
 
-                // Eger Turn RPC zaten geldi ve sira bizdeyse, butonu acik birak
                 if (btnRollDice != null)
-                {
-                    bool isMyTurn = (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
-                    btnRollDice.interactable = isMyTurn && !_gameOver && !_finishOrder.Contains(_localPlayerIndex);
-                    Debug.Log($"[FinishMove] Client: turn={_state.CurrentTurnPlayerIndex}, myTurn={isMyTurn}, button={btnRollDice.interactable}");
-                }
+                    btnRollDice.interactable = false;
             }
             return;
         }
