@@ -626,6 +626,9 @@ public class GameBootstrapper : MonoBehaviour
             _net.OnTurn -= OnNetworkTurn;
             _net.OnMoveRequest -= OnNetworkMoveRequest;
             _net.OnChatMessage -= OnNetworkChatMessage;
+            _net.OnRequestAdvanceTurn -= OnNetworkRequestAdvanceTurn;
+            _net.OnTimerStart -= OnNetworkTimerStart;
+            _net.OnTimerStop -= OnNetworkTimerStop;
         }
 
         if (_bridge != null)
@@ -634,6 +637,10 @@ public class GameBootstrapper : MonoBehaviour
             _bridge.OnDisconnectedEvent -= OnBridgeDisconnected;
             _bridge.OnPlayerLeft -= OnBridgePlayerLeft;
             _bridge.OnPlayerJoined -= OnBridgePlayerJoined;
+            _bridge.OnExitBot -= OnNetworkExitBot;
+            _bridge.OnEnterBot -= OnNetworkEnterBot;
+            _bridge.OnServerTimerExpired -= OnServerTimerExpired;
+            _bridge.OnServerTimerExpiredDisconnected -= OnServerTimerExpiredDisconnected;
         }
 
         if (btnRollDice != null)
@@ -2327,9 +2334,8 @@ public class GameBootstrapper : MonoBehaviour
         {
             _isLeavingToMainMenu = true;
             _isIntentionalDisconnect = true;
-            // leave_room gondermiyoruz - sadece disconnect olacak
-            // Sunucunun disconnect handler'i otomatik 60s reconnect penceresi baslatir
-            _bridge.Disconnect();
+            // Bilinçli çıkış: permanent=true gonder → sunucu hemen cikarir, 60s bekleme yok
+            _bridge.LeaveRoom(true);
             SceneManager.LoadScene(0);
             return;
         }
