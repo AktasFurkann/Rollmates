@@ -989,6 +989,21 @@ public class GameBootstrapper : MonoBehaviour
             string nickname = PlayerPrefs.GetString("PlayerName", "Player");
             _bridge.Connect(nickname);
         }
+
+        // 5 saniye icinde baglanilmazsa butonu tekrar aktif et
+        StartCoroutine(ReconnectButtonTimeout());
+    }
+
+    private IEnumerator ReconnectButtonTimeout()
+    {
+        yield return new WaitForSeconds(5f);
+        // Panel hala aciksa baglanti basarisiz olmus demektir
+        if (panelDisconnect != null && panelDisconnect.activeSelf && btnReconnect != null)
+        {
+            btnReconnect.interactable = true;
+            if (txtDisconnectCountdown != null)
+                txtDisconnectCountdown.text = LocalizationManager.Get("reconnect_failed");
+        }
     }
 
     private void OnApplicationPause(bool pauseStatus)
