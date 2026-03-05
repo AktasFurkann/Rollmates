@@ -152,24 +152,21 @@ namespace LudoFriends.Presentation
         {
             emojiPopup.SetActive(true);
 
-            var rt = emojiPopup.GetComponent<RectTransform>();
             var cg = emojiPopup.GetComponent<CanvasGroup>();
             if (cg == null) cg = emojiPopup.AddComponent<CanvasGroup>();
 
-            Vector2 startPos = Vector2.zero;
-            Vector2 endPos   = new Vector2(0f, 80f);
-            rt.anchoredPosition = startPos;
             cg.alpha = 1f;
 
-            float duration = 5f;
-            float elapsed  = 0f;
+            // 3 saniye gorunur bekle
+            yield return new WaitForSeconds(3f);
 
-            while (elapsed < duration)
+            // 1 saniyede fade out
+            float fadeDuration = 1f;
+            float elapsed = 0f;
+            while (elapsed < fadeDuration)
             {
                 elapsed += Time.deltaTime;
-                float t = elapsed / duration;
-                rt.anchoredPosition = Vector2.Lerp(startPos, endPos, t);
-                cg.alpha = Mathf.Lerp(1f, 0f, t * t);
+                cg.alpha = Mathf.Lerp(1f, 0f, elapsed / fadeDuration);
                 yield return null;
             }
 
