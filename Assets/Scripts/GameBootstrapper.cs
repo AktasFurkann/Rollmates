@@ -1344,6 +1344,22 @@ public class GameBootstrapper : MonoBehaviour
         }
     }
 
+    private bool AllPawnsOnSameSquare(List<PawnView> pawns)
+    {
+        if (pawns.Count <= 1) return true;
+        var first = _pawnStates[pawns[0]];
+        for (int i = 1; i < pawns.Count; i++)
+        {
+            var s = _pawnStates[pawns[i]];
+            if (s.Zone != first.Zone) return false;
+            if (s.IsAtHome && first.IsAtHome) continue; // ikisi de evde = ayni yer
+            if (s.IsInHomeLane && first.IsInHomeLane && s.HomeIndex == first.HomeIndex) continue;
+            if (s.Zone == PawnZone.MainPath && s.MainIndex == first.MainIndex) continue;
+            return false;
+        }
+        return true;
+    }
+
     private void RemoveDisconnectedPlayerPawns(int playerIndex)
     {
         var pawns = GetPawnsForTurn(playerIndex);
@@ -1526,6 +1542,15 @@ public class GameBootstrapper : MonoBehaviour
         if (legal.Count == 1)
         {
             Debug.Log($"[CoRollDiceAnimated] Single legal move, auto-moving");
+            int pawnId = _pawnToId[legal[0]];
+            _net?.SendMoveRequest(turn2, pawnId, roll);
+            yield break;
+        }
+
+        // Tum legal piyonlar ayni karedeyse secim gereksiz - otomatik oyna
+        if (legal.Count > 1 && AllPawnsOnSameSquare(legal))
+        {
+            Debug.Log($"[CoRollDiceAnimated] All {legal.Count} legal pawns on same square, auto-moving first");
             int pawnId = _pawnToId[legal[0]];
             _net?.SendMoveRequest(turn2, pawnId, roll);
             yield break;
