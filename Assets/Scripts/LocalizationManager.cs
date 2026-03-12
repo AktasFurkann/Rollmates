@@ -48,6 +48,18 @@ public class LocalizationManager : MonoBehaviour
         { "color_3",             "Mavi" },
         { "become_spectator",    "İzleyici Ol" },
         { "become_player",       "Oyuncu Ol" },
+        { "qc_0",                "Selam" },
+        { "qc_1",                "İyi Şanslar" },
+        { "qc_2",                "Teşekkürler!" },
+        { "qc_3",                "Hoşçakal" },
+        { "qc_4",                "Haha" },
+        { "qc_5",                "Eyvah" },
+        { "qc_6",                "Evet!" },
+        { "qc_7",                "İyi oyun" },
+        { "qc_8",                "Şanslı zar!" },
+        { "qc_9",                "Hızlan lütfen" },
+        { "qc_10",               "İyi oynadın" },
+        { "qc_11",               "Yeme lütfen" },
     };
 
     private static readonly Dictionary<string, string> _en = new()
@@ -78,6 +90,18 @@ public class LocalizationManager : MonoBehaviour
         { "color_3",             "Blue" },
         { "become_spectator",    "Spectate" },
         { "become_player",       "Play" },
+        { "qc_0",                "Hello" },
+        { "qc_1",                "Good Luck" },
+        { "qc_2",                "Thank you!" },
+        { "qc_3",                "Bye" },
+        { "qc_4",                "Haha" },
+        { "qc_5",                "Oops" },
+        { "qc_6",                "Yes!" },
+        { "qc_7",                "Good game" },
+        { "qc_8",                "Lucky roll!" },
+        { "qc_9",                "Faster Please" },
+        { "qc_10",               "Well Played" },
+        { "qc_11",               "Please don't Kill" },
     };
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -93,7 +117,12 @@ public class LocalizationManager : MonoBehaviour
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
-        CurrentLanguage = (Language)PlayerPrefs.GetInt(PrefKey, (int)Language.Turkish);
+
+        // İlk kez açılıyorsa cihaz diline göre belirle, sonraki açılışlarda kullanıcı tercihini koru
+        int defaultLang = Application.systemLanguage == SystemLanguage.Turkish
+            ? (int)Language.Turkish
+            : (int)Language.English;
+        CurrentLanguage = (Language)PlayerPrefs.GetInt(PrefKey, defaultLang);
     }
 
     /// <summary>Returns the localized string for the given key in the current language.</summary>
@@ -105,6 +134,9 @@ public class LocalizationManager : MonoBehaviour
 
     /// <summary>Returns the player color name at index (0=Red/Kırmızı … 3=Blue/Mavi).</summary>
     public static string GetColorName(int index) => Get($"color_{index}");
+
+    /// <summary>Returns the localized quick chat message at index.</summary>
+    public static string GetQuickChat(int index) => Get($"qc_{index}");
 
     // Instance methods so Unity Inspector Button.onClick can bind them directly.
 

@@ -63,6 +63,7 @@ public class GameBootstrapper : MonoBehaviour
 
     private bool _isRollingDice = false;
     private bool _isAnimating = false;
+    private bool _localRollPending = false; // Kendi roll broadcast'imiz sunucudan donene kadar true
     private Coroutine _animationSafetyTimer;
     [SerializeField] private float diceRollDuration = 0.5f;
     [SerializeField] private float diceTickInterval = 0.12f;
@@ -181,6 +182,7 @@ public class GameBootstrapper : MonoBehaviour
             _net.OnTurn -= OnNetworkTurn;
             _net.OnMoveRequest -= OnNetworkMoveRequest;
             _net.OnRequestAdvanceTurn -= OnNetworkRequestAdvanceTurn;
+            _net.OnChatMessage -= OnNetworkChatMessage;
 
             _net.OnRoll += OnNetworkRoll;
             _net.OnMove += OnNetworkMove;
@@ -408,13 +410,8 @@ public class GameBootstrapper : MonoBehaviour
 
     private void InitializeGame()
     {
-        if (_net != null)
-        {
-            _net.OnRoll += OnNetworkRoll;
-            _net.OnMove += OnNetworkMove;
-            _net.OnTurn += OnNetworkTurn;
-            _net.OnMoveRequest += OnNetworkMoveRequest;
-        }
+        // Event subscriptions are already done in Awake (with -= then +=).
+        // Do NOT re-subscribe here — it causes double handler invocations.
 
         // Player index ve spectator -- InitializeGame 0.5s sonra calisir, property'ler artik kesinlikle sync olmustur.
         if (_bridge != null && _bridge.IsInRoom)
@@ -502,13 +499,8 @@ public class GameBootstrapper : MonoBehaviour
 
         InitScoreboard();
 
-        if (btnRestart != null)
-            btnRestart.onClick.AddListener(OnRestartClicked);
-
-        foreach (var kv in _pawnStates)
-            kv.Key.Clicked += OnPawnClicked;
-
-        btnRollDice.onClick.AddListener(OnRollDiceClicked);
+        // btnRestart, pawn click & dice button subscriptions are already done in Start().
+        // Do NOT re-subscribe here — double handlers cause duplicate processing.
 
         UpdateTurnUI();
         HighlightActivePlayerPawns();
@@ -526,6 +518,22 @@ public class GameBootstrapper : MonoBehaviour
             yield break;
         }
         _net = _bridge;
+
+        // Ensure event subscriptions exist (safe -= then +=)
+        _net.OnRoll -= OnNetworkRoll;
+        _net.OnMove -= OnNetworkMove;
+        _net.OnTurn -= OnNetworkTurn;
+        _net.OnMoveRequest -= OnNetworkMoveRequest;
+        _net.OnRequestAdvanceTurn -= OnNetworkRequestAdvanceTurn;
+        _net.OnChatMessage -= OnNetworkChatMessage;
+
+        _net.OnRoll += OnNetworkRoll;
+        _net.OnMove += OnNetworkMove;
+        _net.OnTurn += OnNetworkTurn;
+        _net.OnMoveRequest += OnNetworkMoveRequest;
+        _net.OnRequestAdvanceTurn += OnNetworkRequestAdvanceTurn;
+        _net.OnChatMessage += OnNetworkChatMessage;
+
         InitializeGame();
     }
 
@@ -846,6 +854,7 @@ public class GameBootstrapper : MonoBehaviour
         // Stuck state'leri temizle
         _isAnimating = false;
         _isRollingDice = false;
+        _localRollPending = false;
         _botPlayers.Clear(); // Host migration sonrasi bot listesini sifirla
 
         // Yeni host ise, host sorumluluklarini devral
@@ -1138,6 +1147,7 @@ public class GameBootstrapper : MonoBehaviour
             // Stuck state'leri temizle
             _isAnimating = false;
             _isRollingDice = false;
+            _localRollPending = false;
 
             return;
         }
@@ -1446,6 +1456,7 @@ public class GameBootstrapper : MonoBehaviour
         {
             int turn = _state.CurrentTurnPlayerIndex;
             Debug.Log($"[CoRollDiceAnimated] Broadcasting Roll EARLY: P{turn} = {roll}");
+            _localRollPending = true; // Sunucudan geri donene kadar CoRemoteDiceAnimation baslatma
             _net.BroadcastRoll(turn, roll);
 
             // Host saves state immediately
@@ -1707,19 +1718,21 @@ public class GameBootstrapper : MonoBehaviour
             btnRollDice.interactable = false;
 
         // If we are not the one who initiated the local roll, play animation
-        bool amIRollingLocally = (playerIndex == _localPlayerIndex && _isRollingDice);
+        bool amIRollingLocally = (playerIndex == _localPlayerIndex && _localRollPending);
+
+        Debug.Log($"[OnNetworkRoll] P{playerIndex} rolled {roll}, amIRollingLocally={amIRollingLocally}, _localRollPending={_localRollPending}, _isRollingDice={_isRollingDice}, localPlayer={_localPlayerIndex}");
+
+        // Kendi broadcast'imizi consume et
+        if (playerIndex == _localPlayerIndex && _localRollPending)
+            _localRollPending = false;
 
         if (!amIRollingLocally)
         {
             // Cancel any existing remote animation to prevent overlap/desync
             StopCoroutine("CoRemoteDiceAnimation");
             StartCoroutine(CoRemoteDiceAnimation(playerIndex, roll));
-        }
-
-        // Eger Host degilsek ve sira bizdeyse, ama biz atmadiysa (Timeout vs)
-        if (playerIndex == _localPlayerIndex && !amIRollingLocally && _consecutiveSixes < 3)
-        {
-            // Logic handled in CoRemoteDiceAnimation
+            if (playerIndex == _localPlayerIndex)
+                Debug.LogWarning($"[OnNetworkRoll] WARNING: Starting CoRemoteDiceAnimation for LOCAL player! This should not happen during manual roll.");
         }
 
         // Host: uzak oyuncu icin hamle timer'i baslat
@@ -1764,6 +1777,13 @@ public class GameBootstrapper : MonoBehaviour
         // Eger benim icin oto-atildiysa, simdi AwaitMove fazini kur
         if (playerIndex == _localPlayerIndex && _consecutiveSixes < 3)
         {
+            // Guard: Sadece hala bizim turumuzsa ve phase AwaitRoll ise AwaitMove'a gec
+            if (_state.CurrentTurnPlayerIndex != _localPlayerIndex)
+            {
+                Debug.LogWarning($"[CoRemoteDiceAnimation] Skipping AwaitMove setup - turn already changed to P{_state.CurrentTurnPlayerIndex}");
+                yield break;
+            }
+
             var legal = GetLegalMoves(playerIndex, finalRoll);
             if (legal.Count > 1)
             {
@@ -1831,6 +1851,7 @@ public class GameBootstrapper : MonoBehaviour
         _state.CurrentTurnPlayerIndex = nextPlayerIndex;
         _phase = TurnPhase.AwaitRoll;
         _isRollingDice = false;
+        _localRollPending = false;
         _currentRoll = -1;
 
         hudView.SetDice(-1);
@@ -1840,6 +1861,7 @@ public class GameBootstrapper : MonoBehaviour
         {
             bool isMyTurn = (nextPlayerIndex == _localPlayerIndex);
             btnRollDice.interactable = isMyTurn && !_gameOver;
+            Debug.Log($"[OnNetworkTurn] Dice interactable={btnRollDice.interactable}, isMyTurn={isMyTurn}, gameOver={_gameOver}, phase={_phase}, localPlayer={_localPlayerIndex}");
         }
         // Sira sende ise ses cal + titresim
         if (nextPlayerIndex == _localPlayerIndex && !_gameOver)
@@ -1877,6 +1899,7 @@ public class GameBootstrapper : MonoBehaviour
         StopTurnTimer(); // Timer durdur
         _phase = TurnPhase.AwaitRoll;
         _isRollingDice = false;
+        _localRollPending = false;
 
         // Bug 3 fix: Reset move tracking for next turn
         _lastProcessedPawnId = -1;
@@ -1917,7 +1940,7 @@ public class GameBootstrapper : MonoBehaviour
             }
             else
             {
-                // Client: UI temizle, butonu kapat - sira geldiginde OnNetworkTurn acacak
+                // Client: UI temizle
                 _currentRoll = -1;
                 hudView.SetDice(-1);
 
@@ -1925,8 +1948,10 @@ public class GameBootstrapper : MonoBehaviour
                 if (_finishOrder.Contains(_localPlayerIndex))
                     _extraTurnsEarned = 0;
 
-                if (btnRollDice != null)
-                    btnRollDice.interactable = false;
+                // Dice butonuna DOKUNMA! OnNetworkTurn zaten yonetiyor.
+                // ApplyMove ve OnNetworkRoll zaten disabled yapiyor.
+                // Burada tekrar false yapmak, animasyon host'tan once bittiginde
+                // OnNetworkTurn'un enable ettigi butonu yanlis sekilde kapatir.
             }
             return;
         }
@@ -2402,6 +2427,7 @@ public class GameBootstrapper : MonoBehaviour
         StopCoroutine("CoRollDiceAnimated");
         CancelAnimationSafetyTimer();
         _isRollingDice = false;
+        _localRollPending = false;
         _isAnimating = false;
 
         // Bekleyen timer delay coroutine'ini iptal et (bot timer'in ustune yazmasini engelle)
@@ -3218,9 +3244,24 @@ public class GameBootstrapper : MonoBehaviour
     {
         // Emoji ise lokal animasyon OnLocalEmojiSend'den zaten tetiklendi,
         // burada sadece aga gonderim yapilir.
-        // Metin ise lokal panelde float goster.
-        if (!message.StartsWith("__EMOJI__"))
+        if (message.StartsWith("__EMOJI__"))
         {
+            // sadece network'e gonder, lokal animasyon zaten OnLocalEmojiSend'de tetiklendi
+        }
+        else if (message.StartsWith(LudoFriends.Presentation.QuickChatView.QuickPrefix))
+        {
+            // Quick chat: kendi dilinde float göster
+            string indexStr = message[LudoFriends.Presentation.QuickChatView.QuickPrefix.Length..];
+            if (int.TryParse(indexStr, out int qIndex))
+            {
+                string localText = LocalizationManager.GetQuickChat(qIndex);
+                var localPanel = hudView.GetCornerPanelForPlayer(_localPlayerIndex, _localPlayerIndex);
+                if (localPanel != null) localPanel.ShowEmojiFloat(localText);
+            }
+        }
+        else
+        {
+            // Serbest metin mesajı
             var localPanel = hudView.GetCornerPanelForPlayer(_localPlayerIndex, _localPlayerIndex);
             if (localPanel != null) localPanel.ShowEmojiFloat(message);
         }
@@ -3247,6 +3288,17 @@ public class GameBootstrapper : MonoBehaviour
                     if (frames != null && frames.Length > 0)
                         senderPanel.ShowAnimatedEmoji(frames);
                 }
+            }
+        }
+        else if (message.StartsWith(LudoFriends.Presentation.QuickChatView.QuickPrefix))
+        {
+            // Quick chat: alıcının kendi dilinde göster
+            string indexStr = message[LudoFriends.Presentation.QuickChatView.QuickPrefix.Length..];
+            if (int.TryParse(indexStr, out int qIndex))
+            {
+                string localText = LocalizationManager.GetQuickChat(qIndex);
+                if (senderPanel != null) senderPanel.ShowEmojiFloat(localText);
+                if (chatView != null) chatView.AddMessage(localText, senderPlayerIndex);
             }
         }
         else

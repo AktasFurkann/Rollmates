@@ -27,10 +27,13 @@ namespace LudoFriends.Presentation
         [Header("Audio")]
         [SerializeField] private SfxPlayer sfx;
 
+        public const string QuickPrefix = "__QUICK__";
+
         private Action<string> _onSend;
         private Action<int> _onEmojiSend; // index tabanlı lokal callback
         private bool _isOpen;
         private GameObject _overlayGO;
+        private TextMeshProUGUI[] _quickMessageLabels;
 
         // -----------------------------------------------
 
@@ -78,15 +81,16 @@ namespace LudoFriends.Presentation
                 _overlayGO.SetActive(false);
             }
 
-            // Mesaj butonları
-            foreach (var btn in quickMessageButtons)
+            // Mesaj butonları – index bazlı gönderim
+            _quickMessageLabels = new TextMeshProUGUI[quickMessageButtons.Length];
+            for (int i = 0; i < quickMessageButtons.Length; i++)
             {
-                if (btn == null) continue;
-                var tmp = btn.GetComponentInChildren<TextMeshProUGUI>();
-                if (tmp == null) continue;
-                string capturedText = tmp.text;
-                btn.onClick.AddListener(() => SendMessage(capturedText));
+                if (quickMessageButtons[i] == null) continue;
+                _quickMessageLabels[i] = quickMessageButtons[i].GetComponentInChildren<TextMeshProUGUI>();
+                int capturedIndex = i;
+                quickMessageButtons[i].onClick.AddListener(() => SendQuickMessage(capturedIndex));
             }
+            RefreshQuickMessageTexts();
 
             // Emoji butonları – index tabanlı
             for (int i = 0; i < emojiEntries.Length; i++)
@@ -112,6 +116,36 @@ namespace LudoFriends.Presentation
         {
             if (index < 0 || index >= emojiEntries.Length) return null;
             return emojiEntries[index].audioClip;
+        }
+
+        // -----------------------------------------------
+
+        private void OnEnable()
+        {
+            LocalizationManager.OnLanguageChanged += RefreshQuickMessageTexts;
+        }
+
+        private void OnDisable()
+        {
+            LocalizationManager.OnLanguageChanged -= RefreshQuickMessageTexts;
+        }
+
+        private void RefreshQuickMessageTexts()
+        {
+            if (_quickMessageLabels == null) return;
+            for (int i = 0; i < _quickMessageLabels.Length; i++)
+            {
+                if (_quickMessageLabels[i] != null)
+                    _quickMessageLabels[i].text = LocalizationManager.GetQuickChat(i);
+            }
+        }
+
+        private void SendQuickMessage(int index)
+        {
+            if (sfx != null) sfx.PlayEmojiSend();
+            // Lokal: kendi dilinde float göster
+            _onSend?.Invoke(QuickPrefix + index);
+            Close();
         }
 
         // -----------------------------------------------
