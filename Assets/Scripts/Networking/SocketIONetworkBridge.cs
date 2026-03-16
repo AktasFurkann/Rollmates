@@ -150,9 +150,14 @@ namespace LudoFriends.Networking
                 _pendingIdentify = true; // Will be sent from Update() on main thread
             };
 
+            _socket.OnError += (sender, e) =>
+            {
+                Debug.LogError($"[SocketIO] Connection error: {e}");
+            };
+
             RegisterEventListeners();
 
-            Debug.Log("[SocketIO] Connecting to server...");
+            Debug.Log($"[SocketIO] Connecting to server: {NetworkConfig.ServerUrl}");
             _socket.Connect();
         }
 
