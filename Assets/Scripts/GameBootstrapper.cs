@@ -139,6 +139,26 @@ public class GameBootstrapper : MonoBehaviour
 
     private string TurnName(int index) => LocalizationManager.GetColorName(index);
 
+    /// <summary>
+    /// Oyuncu adını döndürür: nickname varsa nickname, yoksa renk adı.
+    /// </summary>
+    private string PlayerDisplayName(int playerIndex)
+    {
+        if (_bridge != null && _bridge.IsInRoom)
+        {
+            var players = _bridge.GetPlayers();
+            if (players != null)
+            {
+                foreach (var p in players)
+                {
+                    if (p.playerIndex == playerIndex && !string.IsNullOrEmpty(p.nickname))
+                        return p.nickname;
+                }
+            }
+        }
+        return TurnName(playerIndex);
+    }
+
     private enum DisconnectStatus { None, Disconnected, Reconnecting, CouldNotConnect, Connecting, ReconnectFailed }
     private DisconnectStatus _disconnectStatus = DisconnectStatus.None;
     private float _reconnectTimeLeft = 0f;
@@ -252,7 +272,7 @@ public class GameBootstrapper : MonoBehaviour
         if (txtInGameRoomCode != null && _bridge != null && _bridge.IsInRoom)
             txtInGameRoomCode.text = _bridge.RoomCode;
 
-        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
         // Oyuncu kose panellerini kur
@@ -468,7 +488,7 @@ public class GameBootstrapper : MonoBehaviour
 
         _initialPlayerCount = PlayerCount;
 
-        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);
 
         pawnSpawner.enabled = true;
@@ -542,7 +562,7 @@ public class GameBootstrapper : MonoBehaviour
     {
         // HUD turn label
         if (hudView != null && _state != null)
-            hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+            hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
         // Scoreboard title
         UpdateScoreboard();
@@ -618,7 +638,7 @@ public class GameBootstrapper : MonoBehaviour
 
     private void UpdateTurnUI()
     {
-        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
         if (btnRollDice != null)
             btnRollDice.interactable = !_isSpectator
@@ -781,7 +801,7 @@ public class GameBootstrapper : MonoBehaviour
             // Update UI
             if (hudView != null)
             {
-                hudView.SetTurn(TurnName(turn), turn, _localPlayerIndex);
+                hudView.SetTurn(PlayerDisplayName(turn), turn, _localPlayerIndex);
                 if (roll > 0)
                     hudView.SetDice(roll);
                 else
@@ -891,7 +911,7 @@ public class GameBootstrapper : MonoBehaviour
             {
                 // Siradaki oyuncu hala aktifse, UI guncelle ve timer baslat
                 int currentTurn = _state.CurrentTurnPlayerIndex;
-                hudView.SetTurn(TurnName(currentTurn), currentTurn, _localPlayerIndex);
+                hudView.SetTurn(PlayerDisplayName(currentTurn), currentTurn, _localPlayerIndex);
                 hudView.SetDice(-1);
 
                 if (btnRollDice != null)
@@ -1101,7 +1121,7 @@ public class GameBootstrapper : MonoBehaviour
         int nextTurn = _state.CurrentTurnPlayerIndex;
         Debug.Log($"[AdvanceTurnAfterHostMigration] New turn: P{nextTurn}");
 
-        hudView.SetTurn(TurnName(nextTurn), nextTurn, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(nextTurn), nextTurn, _localPlayerIndex);
         hudView.SetDice(-1);
 
         if (btnRollDice != null)
@@ -1337,7 +1357,7 @@ public class GameBootstrapper : MonoBehaviour
         int nextTurn = _state.CurrentTurnPlayerIndex;
         Debug.Log($"[AdvanceTurnSkipDisconnected] New turn: P{nextTurn}");
 
-        hudView.SetTurn(TurnName(nextTurn), nextTurn, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(nextTurn), nextTurn, _localPlayerIndex);
         hudView.SetDice(-1);
 
         if (btnRollDice != null)
@@ -1467,7 +1487,7 @@ public class GameBootstrapper : MonoBehaviour
             }
         }
 
-        hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         sfx?.PlayDice();
 
         hudView.StartDiceRollAnimation();
@@ -1712,7 +1732,7 @@ public class GameBootstrapper : MonoBehaviour
 
         // Zar ve UI'i TUM oyuncular icin guncelle
         _currentRoll = roll;
-        hudView.SetTurn(TurnName(playerIndex), playerIndex, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(playerIndex), playerIndex, _localPlayerIndex);
 
         // Cift zar atmayi engelle
         if (btnRollDice != null)
@@ -1856,7 +1876,7 @@ public class GameBootstrapper : MonoBehaviour
         _currentRoll = -1;
 
         hudView.SetDice(-1);
-        hudView.SetTurn(TurnName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
+        hudView.SetTurn(PlayerDisplayName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
 
         if (btnRollDice != null)
         {
@@ -2020,7 +2040,7 @@ public class GameBootstrapper : MonoBehaviour
         else if (_bridge == null || !_bridge.IsInRoom)
         {
             hudView.SetDice(-1);
-            hudView.SetTurn(TurnName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+            hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
             if (btnRollDice != null)
                 btnRollDice.interactable = !_gameOver;
@@ -2344,7 +2364,7 @@ public class GameBootstrapper : MonoBehaviour
         foreach (int idx in _finishOrder)
         {
             if (!_disconnectedPlayers.Contains(idx))
-                displayEntries.Add(TurnName(idx));
+                displayEntries.Add(PlayerDisplayName(idx));
         }
 
         // 2. Hala oynayan oyuncular -> "???"
@@ -2358,7 +2378,7 @@ public class GameBootstrapper : MonoBehaviour
         foreach (int idx in _finishOrder)
         {
             if (_disconnectedPlayers.Contains(idx))
-                displayEntries.Add(TurnName(idx));
+                displayEntries.Add(PlayerDisplayName(idx));
         }
 
         // Goster

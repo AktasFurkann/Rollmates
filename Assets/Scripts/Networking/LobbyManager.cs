@@ -4,6 +4,7 @@ using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using System.Collections;
 using LudoFriends.Networking;
+using LudoFriends.Services;
 
 public class LobbyManager : MonoBehaviour
 {
@@ -142,7 +143,12 @@ public class LobbyManager : MonoBehaviour
         _currentStatus = LobbyStatus.Connecting;
         txtStatus.text = LocalizationManager.Get("connecting");
 
+        // GPGS giriş yapılmışsa Google Play adını kullan
         string nickname = PlayerPrefs.GetString("PlayerName", "Player");
+        var gpgs = GPGSManager.Instance;
+        if (gpgs != null && gpgs.IsAuthenticated && !string.IsNullOrEmpty(gpgs.PlayerName))
+            nickname = gpgs.PlayerName;
+
         _bridge.Connect(nickname);
 
         DeepLinkManager.OnPendingCodeChanged += OnDeepLinkReceived;
