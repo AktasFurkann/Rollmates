@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using LudoFriends.Services;
 
 namespace LudoFriends.Presentation
 {
@@ -10,6 +11,11 @@ namespace LudoFriends.Presentation
         [SerializeField] private Button btnPlay;
         [SerializeField] private Button btnSettings;
         [SerializeField] private Button btnExit;
+
+        [Header("Leaderboard & GPGS")]
+        [SerializeField] private Button btnLeaderboard;
+        [SerializeField] private Button btnSignIn;
+        [SerializeField] private GameObject signInPanel;
 
         [Header("Panels")]
         [SerializeField] private GameObject settingsPanel;
@@ -37,6 +43,12 @@ namespace LudoFriends.Presentation
             btnSettings.onClick.AddListener(OnSettingsClicked);
             btnExit.onClick.AddListener(OnExitClicked);
 
+            if (btnLeaderboard != null)
+                btnLeaderboard.onClick.AddListener(OnLeaderboardClicked);
+
+            if (btnSignIn != null)
+                btnSignIn.onClick.AddListener(OnSignInClicked);
+
             if (btnCloseSettings != null)
                 btnCloseSettings.onClick.AddListener(OnCloseSettingsClicked);
 
@@ -57,6 +69,12 @@ namespace LudoFriends.Presentation
                 sliderSfx.value = PlayerPrefs.GetFloat("SfxVolume", 1f);
                 sliderSfx.onValueChanged.AddListener(OnSfxVolumeChanged);
             }
+
+            // GPGS auth durumunu dinle
+            if (GPGSManager.Instance != null)
+                GPGSManager.Instance.OnAuthChanged += OnGPGSAuthChanged;
+
+            UpdateSignInUI();
         }
 
         private void OnPlayClicked()
@@ -113,10 +131,45 @@ namespace LudoFriends.Presentation
             LocalizationManager.Instance?.SetLanguageEN();
         }
 
+        private void OnLeaderboardClicked()
+        {
+            PlayClick();
+            if (GPGSManager.Instance != null)
+                GPGSManager.Instance.ShowAllLeaderboardsUI();
+        }
+
+        private void OnSignInClicked()
+        {
+            PlayClick();
+            if (GPGSManager.Instance != null)
+                GPGSManager.Instance.ManualSignIn();
+        }
+
+        private void OnGPGSAuthChanged(bool isAuthenticated)
+        {
+            UpdateSignInUI();
+        }
+
+        private void UpdateSignInUI()
+        {
+            bool isAuth = GPGSManager.Instance != null && GPGSManager.Instance.IsAuthenticated;
+
+            // Giriş yapılmışsa sign-in butonunu gizle, leaderboard butonunu göster
+            if (btnSignIn != null)
+                btnSignIn.gameObject.SetActive(!isAuth);
+            if (btnLeaderboard != null)
+                btnLeaderboard.gameObject.SetActive(isAuth);
+            if (signInPanel != null)
+                signInPanel.SetActive(!isAuth);
+        }
+
         private void OnDestroy()
         {
             btnLanguageTR?.onClick.RemoveListener(OnLanguageTRClicked);
             btnLanguageEN?.onClick.RemoveListener(OnLanguageENClicked);
+
+            if (GPGSManager.Instance != null)
+                GPGSManager.Instance.OnAuthChanged -= OnGPGSAuthChanged;
         }
 
         private void PlayClick()

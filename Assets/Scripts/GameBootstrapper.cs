@@ -8,6 +8,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using LudoFriends.Networking;
+using LudoFriends.Services;
 
 public class GameBootstrapper : MonoBehaviour
 {
@@ -2302,6 +2303,9 @@ public class GameBootstrapper : MonoBehaviour
                 btnRollDice.interactable = false;
 
             ClearAllHighlights();
+
+            // GPGS: Oyun bitti, skorları raporla
+            ReportGameToGPGS();
         }
 
         UpdateScoreboard();
@@ -3305,6 +3309,23 @@ public class GameBootstrapper : MonoBehaviour
         {
             if (senderPanel != null) senderPanel.ShowEmojiFloat(message);
             if (chatView != null) chatView.AddMessage(message, senderPlayerIndex);
+        }
+    }
+
+    // ==================== GPGS REPORTING ====================
+
+    private void ReportGameToGPGS()
+    {
+        var gpgs = GPGSManager.Instance;
+        if (gpgs == null) return;
+
+        // Herkes için: oynanan oyun sayısını raporla
+        gpgs.ReportGamePlayed();
+
+        // 1. sırada bitiren yerel oyuncu mu?
+        if (_finishOrder.Count > 0 && _finishOrder[0] == _localPlayerIndex)
+        {
+            gpgs.ReportWin();
         }
     }
 }

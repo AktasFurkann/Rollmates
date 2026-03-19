@@ -14,6 +14,12 @@ namespace LudoFriends.Networking
         {
             get
             {
+                // GPGS giriş yapılmışsa Google Play ID kullan (cihazlar arası tutarlı)
+                var gpgs = Services.GPGSManager.Instance;
+                if (gpgs != null && gpgs.IsAuthenticated && !string.IsNullOrEmpty(gpgs.PlayerId))
+                    return gpgs.PlayerId;
+
+                // Fallback: yerel UUID
                 var id = PlayerPrefs.GetString(PLAYER_ID_KEY, "");
                 if (string.IsNullOrEmpty(id))
                 {
