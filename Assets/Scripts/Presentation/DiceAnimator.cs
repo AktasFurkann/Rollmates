@@ -19,6 +19,9 @@ namespace LudoFriends.Presentation
         [Tooltip("Sonuç yüzleri – sprite sheet'in üst satırı (index 0 = değer 1, ..., index 5 = değer 6)")]
         [SerializeField] private Sprite[] faceSprites;
 
+        [Tooltip("Zara basılmadan önceki varsayılan görüntü (boşsa faceSprites[0] kullanılır)")]
+        [SerializeField] private Sprite idleSprite;
+
         private Coroutine _coroutine;
 
         // -----------------------------------------------
@@ -73,7 +76,12 @@ namespace LudoFriends.Presentation
 
             if (targetImage == null) return;
 
-            if (faceSprites != null && faceSprites.Length > 0)
+            if (idleSprite != null)
+            {
+                targetImage.sprite = idleSprite;
+                targetImage.enabled = true;
+            }
+            else if (faceSprites != null && faceSprites.Length > 0)
             {
                 targetImage.sprite = faceSprites[0];
                 targetImage.enabled = true;
