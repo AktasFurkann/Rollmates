@@ -1,5 +1,6 @@
 using TMPro;
 using LudoFriends.Networking;
+using LudoFriends.Services;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -93,6 +94,18 @@ public void Resume()
     {
         Time.timeScale = 1f;
 
+        // Çıkışta reklam göster, sonra ana menüye dön
+        if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
+        {
+            AdManager.Instance.ShowInterstitial(() => DoExitToMainMenu());
+            return;
+        }
+
+        DoExitToMainMenu();
+    }
+
+    private void DoExitToMainMenu()
+    {
         if (game != null)
         {
             game.ExitToMainMenu();

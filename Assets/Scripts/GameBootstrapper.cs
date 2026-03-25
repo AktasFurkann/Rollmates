@@ -270,7 +270,7 @@ public class GameBootstrapper : MonoBehaviour
 
         // Oda kodunu goster
         if (txtInGameRoomCode != null && _bridge != null && _bridge.IsInRoom)
-            txtInGameRoomCode.text = _bridge.RoomCode;
+            txtInGameRoomCode.text = string.Format(LocalizationManager.Get("room_code_label"), _bridge.RoomCode);
 
         hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         hudView.SetDice(-1);

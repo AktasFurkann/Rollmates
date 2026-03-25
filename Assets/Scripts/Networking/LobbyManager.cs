@@ -26,6 +26,8 @@ public class LobbyManager : MonoBehaviour
     [SerializeField] private TMP_Text txtRoomCode;
     [SerializeField] private TMP_Text txtCountdown;
     [SerializeField] private TMP_Text txtPlayerCount;
+    [SerializeField] private TMP_Text txtSelectRoomType;
+    [SerializeField] private TMP_Text txtShareButton;
 
     [Header("Player Slots")]
     [SerializeField] private Image[] playerSlotImages;
@@ -101,6 +103,17 @@ public class LobbyManager : MonoBehaviour
             case LobbyStatus.WaitingForHost:    if (txtCountdown != null) txtCountdown.text = LocalizationManager.Get("waiting_for_host"); break;
         }
         UpdatePlayerList();
+
+        // Lokalize UI elemanlarını güncelle
+        if (txtSelectRoomType != null) txtSelectRoomType.text = LocalizationManager.Get("select_room_type");
+        if (txtShareButton != null) txtShareButton.text = LocalizationManager.Get("share");
+        if (inputRoomCode != null)
+        {
+            var placeholder = inputRoomCode.placeholder as TMP_Text;
+            if (placeholder != null) placeholder.text = LocalizationManager.Get("room_code_input");
+        }
+        if (txtRoomCode != null && !string.IsNullOrWhiteSpace(txtRoomCode.text) && !string.IsNullOrEmpty(_currentRoomCode))
+            SetRoomCodeUI(_currentRoomCode);
     }
 
     private void Start()
@@ -121,6 +134,15 @@ public class LobbyManager : MonoBehaviour
         btnSpectate?.onClick.AddListener(OnSpectateClicked);
 
         if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
+
+        // İlk lokalizasyonu uygula
+        if (txtSelectRoomType != null) txtSelectRoomType.text = LocalizationManager.Get("select_room_type");
+        if (txtShareButton != null) txtShareButton.text = LocalizationManager.Get("share");
+        if (inputRoomCode != null)
+        {
+            var placeholder = inputRoomCode.placeholder as TMP_Text;
+            if (placeholder != null) placeholder.text = LocalizationManager.Get("room_code_input");
+        }
 
         // Player slot'ları gizle
         HideAllPlayerSlots();
@@ -449,7 +471,9 @@ public class LobbyManager : MonoBehaviour
         if (string.IsNullOrEmpty(_currentRoomCode)) return;
 
         string shareUrl = $"https://AktasFurkann.github.io/rollmateslink/?code={_currentRoomCode}";
-        string message = $"Rollmates'te benimle oyna! Odama katıl: {shareUrl}";
+        string message = LocalizationManager.CurrentLanguage == LocalizationManager.Language.Turkish
+            ? $"Rollmates'te benimle oyna! Odama katıl: {shareUrl}"
+            : $"Play with me on Rollmates! Join my room: {shareUrl}";
 
         GUIUtility.systemCopyBuffer = shareUrl;
         _currentStatus = LobbyStatus.InviteCopied;
@@ -593,7 +617,7 @@ public class LobbyManager : MonoBehaviour
     private void SetRoomCodeUI(string code)
     {
         if (txtRoomCode != null)
-            txtRoomCode.text = string.IsNullOrWhiteSpace(code) ? "" : $"Oda: {code}";
+            txtRoomCode.text = string.IsNullOrWhiteSpace(code) ? "" : string.Format(LocalizationManager.Get("room_label"), code);
     }
 
     private IEnumerator ResetStatusAfterDelay(float delay)
