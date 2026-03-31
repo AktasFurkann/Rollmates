@@ -1,41 +1,99 @@
-// using UnityEngine;
+using System;
+using UnityEngine;
 
-// namespace LudoFriends.Networking
-// {
-//     // Offline’da her şey “lokalde” anında çalışır.
-//     public class OfflineNetworkBridge : MonoBehaviour, IGameNetwork
-//     {
-//         public bool IsHost => true;
+namespace LudoFriends.Networking
+{
+    /// <summary>
+    /// Offline loopback implementation of IGameNetwork.
+    /// All Broadcast/Send methods invoke their corresponding events synchronously,
+    /// simulating a local server. Used for single-player bot games.
+    /// </summary>
+    public class OfflineNetworkBridge : MonoBehaviour, IGameNetwork
+    {
+        public static OfflineNetworkBridge Instance { get; private set; }
 
-//         // Bu event’leri GameBootstrapper dinleyecek
-//         public System.Action<int, int> OnRoll;          // (playerIndex, roll)
-//         public System.Action<int, int, int> OnMove;     // (playerIndex, pawnId, roll)
-//         public System.Action<int> OnTurn;               // (nextPlayerIndex)
+        // ── IGameNetwork Events ──
+        public event Action<int, int> OnRoll;
+        public event Action<int, int, int, int> OnMove;
+        public event Action<int> OnTurn;
+        public event Action<int, int, int> OnMoveRequest;
+        public event Action OnRequestAdvanceTurn;
+        public event Action<int> OnRollRequest;
+        public event Action<float> OnTimerStart;
+        public event Action OnTimerStop;
+        public event Action<string, int> OnChatMessage;
 
-//         public void BroadcastRoll(int playerIndex, int roll)
-//         {
-//             OnRoll?.Invoke(playerIndex, roll);
-//         }
+        public bool IsHost => true;
 
-//         public void SendMoveRequest(int playerIndex, int pawnId)
-//         {
-//             // Offline’da “host” da biziz, request’i direkt kabul edip broadcast edeceğiz.
-//             // Roll’u GameBootstrapper yönetecek, o yüzden burada roll yok.
-//             // GameBootstrapper, request gelince “mevcut roll” ile BroadcastMove çağıracak.
-//         }
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+        }
 
-//         public void BroadcastMove(int playerIndex, int pawnId, int roll)
-//         {
-//             OnMove?.Invoke(playerIndex, pawnId, roll);
-//         }
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
 
-//         public void BroadcastTurn(int nextPlayerIndex)
-//         {
-//             OnTurn?.Invoke(nextPlayerIndex);
-//         }
-//         public void RequestAdvanceTurn()
-// {
-//     // Offline'da gerek yok ama interface için implement et
-// }
-//     }
-// }
+        // ── Send / Broadcast (loopback — invoke events directly) ──
+
+        public void SendRollRequest(int playerIndex)
+            => OnRollRequest?.Invoke(playerIndex);
+
+        public void BroadcastRoll(int playerIndex, int roll)
+            => OnRoll?.Invoke(playerIndex, roll);
+
+        public void SendMoveRequest(int playerIndex, int pawnId, int roll)
+            => OnMoveRequest?.Invoke(playerIndex, pawnId, roll);
+
+        public void BroadcastMove(int playerIndex, int pawnId, int roll, int moveId)
+            => OnMove?.Invoke(playerIndex, pawnId, roll, moveId);
+
+        public void BroadcastTurn(int nextPlayerIndex)
+            => OnTurn?.Invoke(nextPlayerIndex);
+
+        public void RequestAdvanceTurn()
+            => OnRequestAdvanceTurn?.Invoke();
+
+        public void BroadcastTimerStart(float duration, int playerIndex)
+            => OnTimerStart?.Invoke(duration);
+
+        public void BroadcastTimerStop()
+            => OnTimerStop?.Invoke();
+
+        public void BroadcastChatMessage(string message, int senderPlayerIndex)
+            => OnChatMessage?.Invoke(message, senderPlayerIndex);
+
+        // ── State Persistence (no-op in offline — state lives in memory only) ──
+
+        public void SyncGameState(int turn, int roll, int phase, int sixes, int extraTurns) { }
+
+        public bool TryGetGameState(out int turn, out int roll, out int phase, out int sixes, out int extraTurns)
+        {
+            turn = roll = phase = sixes = extraTurns = 0;
+            return false;
+        }
+
+        public void SavePawnStates(string serializedStates) { }
+        public string GetPawnStates() => null;
+
+        public void SaveTimerState(double startTime, float duration) { }
+
+        public bool TryGetTimerState(out double startTime, out float duration)
+        {
+            startTime = 0;
+            duration = 0;
+            return false;
+        }
+
+        public void ClearTimerState() { }
+
+        public void SaveFinishOrder(int[] finishOrder) { }
+        public int[] GetFinishOrder() => null;
+    }
+}

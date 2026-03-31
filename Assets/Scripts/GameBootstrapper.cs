@@ -108,6 +108,9 @@ public class GameBootstrapper : MonoBehaviour
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _tempDisconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
+    private readonly HashSet<int> _lobbyBots = new HashSet<int>();
+    private bool _isBotGame = false;
+    private Coroutine _botTurnCoroutine;
     private const float BotAutoDelay = 1.5f;
     private bool _waitingForReconnectState = false;
     private bool _gamePaused = false;
@@ -144,6 +147,9 @@ public class GameBootstrapper : MonoBehaviour
     /// </summary>
     private string PlayerDisplayName(int playerIndex)
     {
+        if (_lobbyBots.Contains(playerIndex))
+            return $"Bot {playerIndex}";
+
         if (_bridge != null && _bridge.IsInRoom)
         {
             var players = _bridge.GetPlayers();
@@ -193,8 +199,31 @@ public class GameBootstrapper : MonoBehaviour
         _state = new GameState();
         _dice = new DiceService();
 
-        _bridge = SocketIONetworkBridge.Instance;
-        _net = _bridge;
+        // ── Bot game mode detection ──
+        if (BotGameConfig.IsActive)
+        {
+            _isBotGame = true;
+            _bridge = null;
+
+            // Create offline loopback bridge
+            var offlineGo = new GameObject("OfflineNetworkBridge");
+            _net = offlineGo.AddComponent<OfflineNetworkBridge>();
+
+            _localPlayerIndex = 0;
+            _initialPlayerCount = BotGameConfig.TotalPlayers;
+
+            for (int i = 1; i < BotGameConfig.TotalPlayers; i++)
+                _lobbyBots.Add(i);
+
+            BotGameConfig.Reset();
+
+            Debug.Log($"[GameBootstrapper] Bot game: {_initialPlayerCount} players, bots: {string.Join(",", _lobbyBots)}");
+        }
+        else
+        {
+            _bridge = SocketIONetworkBridge.Instance;
+            _net = _bridge;
+        }
 
         if (_net != null)
         {
@@ -233,7 +262,11 @@ public class GameBootstrapper : MonoBehaviour
         }
 
         // Player index + spectator tespiti + initialPlayerCount
-        if (_bridge != null && _bridge.IsInRoom)
+        if (_isBotGame)
+        {
+            // Already set in bot mode detection block above
+        }
+        else if (_bridge != null && _bridge.IsInRoom)
         {
             _isSpectator = _bridge.IsSpectator;
             _localPlayerIndex = _bridge.LocalPlayerIndex;
@@ -384,6 +417,7 @@ public class GameBootstrapper : MonoBehaviour
         sfx?.PlayGameStart();
 
         // Ilk sira icin timer baslat -- spectator icin baslatma
+        // Bot game'de ilk sira her zaman insan (index 0), timer normal baslar
         if (!_isSpectator)
             StartTurnTimer(rollTimeLimit);
     }
@@ -435,7 +469,12 @@ public class GameBootstrapper : MonoBehaviour
         // Do NOT re-subscribe here — it causes double handler invocations.
 
         // Player index ve spectator -- InitializeGame 0.5s sonra calisir, property'ler artik kesinlikle sync olmustur.
-        if (_bridge != null && _bridge.IsInRoom)
+        if (_isBotGame)
+        {
+            // Already set in Awake — do not override
+            Debug.Log($"[GameBootstrapper] InitializeGame: Bot game, {_initialPlayerCount} players");
+        }
+        else if (_bridge != null && _bridge.IsInRoom)
         {
             _isSpectator = _bridge.IsSpectator;
             _localPlayerIndex = _bridge.LocalPlayerIndex;
@@ -628,9 +667,9 @@ public class GameBootstrapper : MonoBehaviour
         }
         else
         {
-            // Offline mod: renk adlari
+            // Offline / bot mod: renk adlari + bot isimleri
             for (int i = 0; i < 4; i++)
-                cornerNames[i] = TurnName(i);
+                cornerNames[i] = _lobbyBots.Contains(i) ? $"Bot {i}" : TurnName(i);
         }
 
         hudView.SetupPlayerCorners(cornerNames, _localPlayerIndex, PlayerCount);
@@ -670,6 +709,13 @@ public class GameBootstrapper : MonoBehaviour
             _bridge.OnEnterBot -= OnNetworkEnterBot;
             _bridge.OnServerTimerExpired -= OnServerTimerExpired;
             _bridge.OnServerTimerExpiredDisconnected -= OnServerTimerExpiredDisconnected;
+        }
+
+        // Cleanup offline bridge if we created it
+        if (_isBotGame && _net != null && _net is OfflineNetworkBridge offlineBridge)
+        {
+            if (offlineBridge.gameObject != null)
+                Destroy(offlineBridge.gameObject);
         }
 
         if (btnRollDice != null)
@@ -1486,6 +1532,20 @@ public class GameBootstrapper : MonoBehaviour
                 _net.SyncGameState(turn, roll, (int)_phase, _consecutiveSixes, _extraTurnsEarned);
             }
         }
+        else if (_bridge == null || !_bridge.IsInRoom)
+        {
+            // Offline / bot mode: track consecutive sixes locally (OnNetworkRoll won't fire)
+            if (roll == 6)
+            {
+                _consecutiveSixes++;
+                if (_consecutiveSixes < 3 && HasPawnOutsideHomeLane(_state.CurrentTurnPlayerIndex))
+                    _extraTurnsEarned++;
+            }
+            else
+            {
+                _consecutiveSixes = 0;
+            }
+        }
 
         hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         sfx?.PlayDice();
@@ -1576,6 +1636,7 @@ public class GameBootstrapper : MonoBehaviour
                         btnRollDice.interactable = !_isSpectator && !_gameOver
                             && (_state.CurrentTurnPlayerIndex == _localPlayerIndex);
                     HighlightActivePlayerPawns();
+                    StartTurnTimer(rollTimeLimit);
                 }
                 else
                 {
@@ -1993,11 +2054,18 @@ public class GameBootstrapper : MonoBehaviour
             hudView.SetDice(-1);
             Debug.Log($"[FinishMove] Offline: Extra turn! Remaining: {_extraTurnsEarned}");
 
-            if (btnRollDice != null)
-                btnRollDice.interactable = !_gameOver;
-
-            HighlightActivePlayerPawns();
-            StartTurnTimer(rollTimeLimit);
+            if (_lobbyBots.Contains(_state.CurrentTurnPlayerIndex))
+            {
+                if (btnRollDice != null) btnRollDice.interactable = false;
+                ScheduleBotTurn();
+            }
+            else
+            {
+                if (btnRollDice != null)
+                    btnRollDice.interactable = !_gameOver;
+                HighlightActivePlayerPawns();
+                StartTurnTimer(rollTimeLimit);
+            }
             return;
         }
 
@@ -2042,10 +2110,18 @@ public class GameBootstrapper : MonoBehaviour
             hudView.SetDice(-1);
             hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 
-            if (btnRollDice != null)
-                btnRollDice.interactable = !_gameOver;
-
-            StartTurnTimer(rollTimeLimit); // Offline modda sira degisiminde timer baslat
+            if (_lobbyBots.Contains(_state.CurrentTurnPlayerIndex))
+            {
+                // Bot's turn — disable dice, schedule bot play
+                if (btnRollDice != null) btnRollDice.interactable = false;
+                ScheduleBotTurn();
+            }
+            else
+            {
+                if (btnRollDice != null)
+                    btnRollDice.interactable = !_gameOver;
+                StartTurnTimer(rollTimeLimit);
+            }
         }
 
         HighlightActivePlayerPawns();
@@ -2429,6 +2505,9 @@ public class GameBootstrapper : MonoBehaviour
 
     public void ExitToMainMenu()
     {
+        // Bot game cleanup
+        BotGameConfig.Reset();
+
         if (_bridge != null && _bridge.IsInRoom)
         {
             _isLeavingToMainMenu = true;
@@ -2443,12 +2522,109 @@ public class GameBootstrapper : MonoBehaviour
         SceneManager.LoadScene(0);
     }
 
-    // ==================== BOT MODE ====================
+    // ==================== LOBBY BOT (singleplayer) ====================
+
+    private void ScheduleBotTurn()
+    {
+        if (_botTurnCoroutine != null)
+            StopCoroutine(_botTurnCoroutine);
+        _botTurnCoroutine = StartCoroutine(CoBotPlayTurn());
+    }
+
+    private IEnumerator CoBotPlayTurn()
+    {
+        int botIndex = _state.CurrentTurnPlayerIndex;
+        if (!_lobbyBots.Contains(botIndex) || _gameOver) yield break;
+
+        // Wait before acting (feel more natural)
+        yield return new WaitForSeconds(BotAutoDelay);
+        if (_gameOver || _state.CurrentTurnPlayerIndex != botIndex) yield break;
+
+        // ── Roll dice ──
+        _isRollingDice = true;
+        DisableAllPawnClicks();
+        if (btnRollDice != null) btnRollDice.interactable = false;
+
+        int roll = _dice.Roll();
+        _currentRoll = roll;
+
+        // Track consecutive sixes (same logic as OnNetworkRoll)
+        if (roll == 6)
+        {
+            _consecutiveSixes++;
+            if (_consecutiveSixes < 3 && HasPawnOutsideHomeLane(botIndex))
+                _extraTurnsEarned++;
+        }
+        else
+        {
+            _consecutiveSixes = 0;
+        }
+
+        // Play dice animation
+        hudView.SetTurn(PlayerDisplayName(botIndex), botIndex, _localPlayerIndex);
+        sfx?.PlayDice();
+        hudView.StartDiceRollAnimation();
+        yield return new WaitForSeconds(diceRollDuration);
+        hudView.SetDice(roll);
+        _isRollingDice = false;
+
+        yield return new WaitForSeconds(0.5f);
+
+        // ── 3 consecutive sixes penalty ──
+        if (_consecutiveSixes >= 3)
+        {
+            Debug.Log($"[CoBotPlayTurn] Bot P{botIndex} rolled 3 consecutive sixes — penalty!");
+            _consecutiveSixes = 0;
+            _extraTurnsEarned = 0;
+            AdvanceTurnInternalOnly();
+            yield break;
+        }
+
+        // ── Check legal moves ──
+        var legal = GetLegalMoves(botIndex, roll);
+
+        if (legal.Count == 0)
+        {
+            Debug.Log($"[CoBotPlayTurn] Bot P{botIndex} has no legal moves");
+            if (_extraTurnsEarned > 0)
+            {
+                _extraTurnsEarned--;
+                _currentRoll = -1;
+                hudView.SetDice(-1);
+                ScheduleBotTurn(); // bot gets extra turn
+            }
+            else
+            {
+                AdvanceTurnInternalOnly();
+            }
+            yield break;
+        }
+
+        // ── Pick a move (random among legal options) ──
+        yield return new WaitForSeconds(0.5f); // "thinking" delay
+
+        if (_gameOver || _state.CurrentTurnPlayerIndex != botIndex) yield break;
+
+        PawnView chosen = legal[Random.Range(0, legal.Count)];
+        int pawnId = _pawnToId[chosen];
+
+        Debug.Log($"[CoBotPlayTurn] Bot P{botIndex} moving pawn {pawnId} with roll {roll}");
+
+        // Process through the standard move pipeline:
+        // SendMoveRequest → OnNetworkMoveRequest (host validates) → BroadcastMove → OnNetworkMove → ApplyMove → FinishMove
+        _phase = TurnPhase.AwaitMove;
+        _net.SendMoveRequest(botIndex, pawnId, roll);
+        // FinishMove will handle extra turns and turn advancement,
+        // which will call ScheduleBotTurn again if next player is also a bot.
+    }
+
+    // ==================== BOT MODE (AFK recovery) ====================
 
     private void SetLocalBotMode(bool active)
     {
         _localBotMode = active;
-        if (btnTakeControl != null)
+        // Don't show TakeControl button in bot games — lobby bots can't be "taken over"
+        if (btnTakeControl != null && !_isBotGame)
             btnTakeControl.gameObject.SetActive(active);
     }
 

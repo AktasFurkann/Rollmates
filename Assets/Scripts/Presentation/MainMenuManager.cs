@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using LudoFriends.Networking;
 using LudoFriends.Services;
 
 namespace LudoFriends.Presentation
@@ -9,6 +10,7 @@ namespace LudoFriends.Presentation
     {
         [Header("Buttons")]
         [SerializeField] private Button btnPlay;
+        [SerializeField] private Button btnPlayWithBots;
         [SerializeField] private Button btnSettings;
         [SerializeField] private Button btnExit;
 
@@ -42,6 +44,9 @@ namespace LudoFriends.Presentation
             btnPlay.onClick.AddListener(OnPlayClicked);
             btnSettings.onClick.AddListener(OnSettingsClicked);
             btnExit.onClick.AddListener(OnExitClicked);
+
+            if (btnPlayWithBots != null)
+                btnPlayWithBots.onClick.AddListener(OnPlayWithBotsClicked);
 
             if (btnLeaderboard != null)
                 btnLeaderboard.onClick.AddListener(OnLeaderboardClicked);
@@ -80,6 +85,13 @@ namespace LudoFriends.Presentation
         private void OnPlayClicked()
         {
             PlayClick();
+            SceneManager.LoadScene("LobbyScene");
+        }
+
+        private void OnPlayWithBotsClicked()
+        {
+            PlayClick();
+            BotGameConfig.PendingBotLobby = true;
             SceneManager.LoadScene("LobbyScene");
         }
 
@@ -165,6 +177,7 @@ namespace LudoFriends.Presentation
 
         private void OnDestroy()
         {
+            btnPlayWithBots?.onClick.RemoveListener(OnPlayWithBotsClicked);
             btnLanguageTR?.onClick.RemoveListener(OnLanguageTRClicked);
             btnLanguageEN?.onClick.RemoveListener(OnLanguageENClicked);
 

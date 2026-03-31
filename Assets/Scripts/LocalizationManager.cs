@@ -65,6 +65,9 @@ public class LocalizationManager : MonoBehaviour
         { "qc_9",                "Hızlan lütfen" },
         { "qc_10",               "İyi oynadın" },
         { "qc_11",               "Yeme lütfen" },
+        { "play_with_bots",      "Botlarla Oyna" },
+        { "add_bot",             "Bot Ekle +" },
+        { "remove_bot",          "Bot Çıkar -" },
     };
 
     private static readonly Dictionary<string, string> _en = new()
@@ -112,6 +115,9 @@ public class LocalizationManager : MonoBehaviour
         { "qc_9",                "Faster Please" },
         { "qc_10",               "Well Played" },
         { "qc_11",               "Please don't Kill" },
+        { "play_with_bots",      "Play vs Bots" },
+        { "add_bot",             "Add Bot +" },
+        { "remove_bot",          "Remove Bot -" },
     };
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]

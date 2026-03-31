@@ -51,11 +51,20 @@ public class LobbyManager : MonoBehaviour
     [SerializeField] private Button btnPrivate;
     [SerializeField] private Button btnCancelChoice;
 
+    [Header("Bot Game")]
+    [SerializeField] private Button btnAddBot;          // Bekleme ekranındaki "Bot Ekle +" butonu
+    [SerializeField] private Button btnRemoveBot;       // Bekleme ekranındaki "Bot Çıkar -" butonu
+
     private bool _gameStarted = false;
     private bool _localIsSpectating = false;
     private Coroutine _countdownCoroutine;
     private string _currentRoomCode = "";
     private SocketIONetworkBridge _bridge;
+
+    // Bot lobby state
+    private bool _isBotLobby = false;
+    private int _botCount = 0;
+    private const int MaxBots = 3; // max 3 bots + 1 human = 4
 
     private readonly Color[] _playerColors = new Color[]
     {
@@ -135,6 +144,12 @@ public class LobbyManager : MonoBehaviour
 
         if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
 
+        // Bot setup
+        btnAddBot?.onClick.AddListener(OnAddBotClicked);
+        btnRemoveBot?.onClick.AddListener(OnRemoveBotClicked);
+        if (btnAddBot != null) btnAddBot.gameObject.SetActive(false);
+        if (btnRemoveBot != null) btnRemoveBot.gameObject.SetActive(false);
+
         // İlk lokalizasyonu uygula
         if (txtSelectRoomType != null) txtSelectRoomType.text = LocalizationManager.Get("select_room_type");
         if (txtShareButton != null) txtShareButton.text = LocalizationManager.Get("share");
@@ -151,7 +166,15 @@ public class LobbyManager : MonoBehaviour
         if (btnStartGame != null) btnStartGame.gameObject.SetActive(false);
         if (btnSpectate != null) btnSpectate.gameObject.SetActive(false);
 
-        // SocketIO bridge'i bul veya oluştur
+        // ── Bot lobby: sunucuya bağlanmadan direkt bot ekranına gir ──
+        if (BotGameConfig.PendingBotLobby)
+        {
+            BotGameConfig.PendingBotLobby = false;
+            EnterBotLobby();
+            return;
+        }
+
+        // ── Online: SocketIO bridge'i bul veya oluştur ──
         _bridge = SocketIONetworkBridge.Instance;
         if (_bridge == null)
         {
@@ -188,6 +211,8 @@ public class LobbyManager : MonoBehaviour
         btnCancelChoice?.onClick.RemoveListener(OnCancelChoiceClicked);
         btnStartGame?.onClick.RemoveListener(OnStartGameClicked);
         btnSpectate?.onClick.RemoveListener(OnSpectateClicked);
+        btnAddBot?.onClick.RemoveAllListeners();
+        btnRemoveBot?.onClick.RemoveAllListeners();
 
         UnsubscribeBridge();
 
@@ -389,6 +414,13 @@ public class LobbyManager : MonoBehaviour
     {
         PlayClick();
 
+        // Bot lobby: Start butonu bot oyununu başlatır
+        if (_isBotLobby)
+        {
+            OnStartBotGameClicked();
+            return;
+        }
+
         if (!_bridge.IsHost)
         {
             Debug.LogWarning("[OnStartGameClicked] Only host can start game!");
@@ -454,6 +486,13 @@ public class LobbyManager : MonoBehaviour
     private void OnBackClicked()
     {
         PlayClick();
+
+        // Bot lobby: geri çık, ana buton paneline dön
+        if (_isBotLobby)
+        {
+            ExitBotLobby();
+            return;
+        }
 
         if (_bridge != null && _bridge.IsInRoom)
             _bridge.LeaveRoom(true);
@@ -562,6 +601,14 @@ public class LobbyManager : MonoBehaviour
 
     private void UpdatePlayerList()
     {
+        // ── Bot lobby mode ──
+        if (_isBotLobby)
+        {
+            UpdateBotLobbyPlayerList();
+            return;
+        }
+
+        // ── Online mode ──
         if (_bridge == null || !_bridge.IsInRoom) return;
 
         int playerCount = _bridge.PlayerCount;
@@ -601,6 +648,50 @@ public class LobbyManager : MonoBehaviour
         {
             btnStartGame.interactable = playerCount >= minPlayersToStart;
         }
+    }
+
+    private void UpdateBotLobbyPlayerList()
+    {
+        int totalPlayers = 1 + _botCount; // human + bots
+
+        if (txtPlayerCount != null)
+            txtPlayerCount.text = $"{totalPlayers} / {maxPlayers}";
+
+        HideAllPlayerSlots();
+
+        // Slot 0: human player
+        if (playerSlotObjects != null && playerSlotObjects.Length > 0)
+            playerSlotObjects[0].SetActive(true);
+        if (playerSlotImages != null && playerSlotImages.Length > 0)
+            playerSlotImages[0].color = _playerColors[0];
+        if (playerSlotNames != null && playerSlotNames.Length > 0)
+        {
+            string nickname = PlayerPrefs.GetString("PlayerName", "Player");
+            var gpgs = GPGSManager.Instance;
+            if (gpgs != null && gpgs.IsAuthenticated && !string.IsNullOrEmpty(gpgs.PlayerName))
+                nickname = gpgs.PlayerName;
+            playerSlotNames[0].text = $"{LocalizationManager.GetColorName(0)}: {nickname}";
+        }
+
+        // Bot slots
+        for (int i = 0; i < _botCount; i++)
+        {
+            int slotIndex = i + 1;
+            if (playerSlotObjects != null && slotIndex < playerSlotObjects.Length)
+                playerSlotObjects[slotIndex].SetActive(true);
+            if (playerSlotImages != null && slotIndex < playerSlotImages.Length)
+                playerSlotImages[slotIndex].color = _playerColors[slotIndex];
+            if (playerSlotNames != null && slotIndex < playerSlotNames.Length)
+                playerSlotNames[slotIndex].text = $"{LocalizationManager.GetColorName(slotIndex)}: Bot {slotIndex}";
+        }
+
+        // Update button states
+        if (btnStartGame != null)
+            btnStartGame.interactable = _botCount >= 1; // en az 1 bot = 2 oyuncu
+        if (btnAddBot != null)
+            btnAddBot.interactable = _botCount < MaxBots;
+        if (btnRemoveBot != null)
+            btnRemoveBot.interactable = _botCount > 0;
     }
 
     private void HideAllPlayerSlots()
@@ -655,5 +746,93 @@ public class LobbyManager : MonoBehaviour
     {
         PlayClick();
         if (panelCreateChoice != null) panelCreateChoice.SetActive(false);
+    }
+
+    // ==================== BOT GAME ====================
+
+    private void EnterBotLobby()
+    {
+        _isBotLobby = true;
+        _botCount = 0;
+
+        // UI: panelButtons gizle, panelWaiting göster
+        if (panelButtons != null) panelButtons.SetActive(false);
+        if (panelWaiting != null) panelWaiting.SetActive(true);
+
+        // Online'a özel elemanları gizle
+        if (btnShare != null) btnShare.gameObject.SetActive(false);
+        if (btnSpectate != null) btnSpectate.gameObject.SetActive(false);
+        if (txtCountdown != null) txtCountdown.text = "";
+        if (txtRoomCode != null) txtRoomCode.text = "";
+
+        // Bot butonlarını göster
+        if (btnAddBot != null) btnAddBot.gameObject.SetActive(true);
+        if (btnRemoveBot != null) btnRemoveBot.gameObject.SetActive(true);
+
+        // Start butonu göster (henüz disabled)
+        if (btnStartGame != null)
+        {
+            btnStartGame.gameObject.SetActive(true);
+            btnStartGame.interactable = false;
+        }
+
+        if (txtStatus != null)
+            txtStatus.text = LocalizationManager.Get("play_with_bots");
+
+        UpdatePlayerList();
+    }
+
+    private void ExitBotLobby()
+    {
+        _isBotLobby = false;
+        _botCount = 0;
+
+        // Sunucuya hiç bağlanmadık, MainMenu'ye dön
+        SceneManager.LoadScene("MainMenu");
+    }
+
+    private void OnAddBotClicked()
+    {
+        PlayClick();
+        if (_botCount >= MaxBots) return;
+
+        _botCount++;
+        Debug.Log($"[LobbyManager] Bot added. Total: 1 human + {_botCount} bots");
+        UpdatePlayerList();
+    }
+
+    private void OnRemoveBotClicked()
+    {
+        PlayClick();
+        if (_botCount <= 0) return;
+
+        _botCount--;
+        Debug.Log($"[LobbyManager] Bot removed. Total: 1 human + {_botCount} bots");
+        UpdatePlayerList();
+    }
+
+    private void OnStartBotGameClicked()
+    {
+        if (!_isBotLobby || _botCount < 1) return;
+
+        int totalPlayers = 1 + _botCount;
+
+        // Disconnect from server if connected
+        if (_bridge != null)
+        {
+            if (_bridge.IsInRoom)
+                _bridge.LeaveRoom(true);
+            _bridge.Disconnect();
+        }
+
+        BotGameConfig.IsActive = true;
+        BotGameConfig.TotalPlayers = totalPlayers;
+
+        Debug.Log($"[LobbyManager] Starting bot game: {totalPlayers} players ({_botCount} bots)");
+
+        if (sfxSource != null && gameStartSound != null)
+            sfxSource.PlayOneShot(gameStartSound);
+
+        SceneManager.LoadScene(gameSceneName);
     }
 }
