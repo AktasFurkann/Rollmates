@@ -2600,12 +2600,12 @@ public class GameBootstrapper : MonoBehaviour
             yield break;
         }
 
-        // ── Pick a move (random among legal options) ──
+        // ── Pick a move (priority-based AI) ──
         yield return new WaitForSeconds(0.5f); // "thinking" delay
 
         if (_gameOver || _state.CurrentTurnPlayerIndex != botIndex) yield break;
 
-        PawnView chosen = legal[Random.Range(0, legal.Count)];
+        PawnView chosen = BotPickMove(legal, botIndex, roll);
         int pawnId = _pawnToId[chosen];
 
         Debug.Log($"[CoBotPlayTurn] Bot P{botIndex} moving pawn {pawnId} with roll {roll}");
@@ -2616,6 +2616,149 @@ public class GameBootstrapper : MonoBehaviour
         _net.SendMoveRequest(botIndex, pawnId, roll);
         // FinishMove will handle extra turns and turn advancement,
         // which will call ScheduleBotTurn again if next player is also a bot.
+    }
+
+    /// <summary>
+    /// Priority-based bot move selection:
+    /// 1. Finish a pawn (HomeIndex + roll == 5)
+    /// 2. Capture an enemy pawn on the main path
+    /// 3. Move a threatened pawn to a safe square or into the home lane
+    /// 4. Enter a new pawn from home base if 0–1 active pawns on board
+    /// 5. Advance the most progressed pawn (closest to finish)
+    /// 6. Random fallback
+    /// </summary>
+    private PawnView BotPickMove(List<PawnView> legal, int botIndex, int roll)
+    {
+        if (legal.Count == 1) return legal[0];
+
+        const int pathCount = 52;
+        TryGetStartIndexForPlayer(botIndex, out int botStart);
+        int homeEntry = GetHomeEntryIndex(botIndex);
+
+        // ── 1. Finish a pawn ──
+        foreach (var pawn in legal)
+        {
+            var st = _pawnStates[pawn];
+            if (st.IsInHomeLane && st.HomeIndex + roll == 5)
+                return pawn;
+        }
+
+        // ── 2. Capture an enemy pawn ──
+        foreach (var pawn in legal)
+        {
+            var st = _pawnStates[pawn];
+            if (st.IsAtHome || st.IsInHomeLane) continue;
+
+            int from = st.MainIndex;
+            int distToEntry = (homeEntry - from + pathCount) % pathCount;
+            if (roll > distToEntry) continue; // will enter home lane, no capture
+
+            int landing = (from + roll) % pathCount;
+            if (safeSquares != null && safeSquares.IsSafeIndex(landing)) continue;
+
+            foreach (var kv in _pawnStates)
+            {
+                if (_pawnOwner[kv.Key] == botIndex) continue;
+                var enemySt = kv.Value;
+                if (enemySt.IsAtHome || enemySt.IsInHomeLane || enemySt.IsFinished) continue;
+                if (enemySt.MainIndex == landing)
+                    return pawn;
+            }
+        }
+
+        // ── 3. Move threatened pawn to safety ──
+        foreach (var pawn in legal)
+        {
+            var st = _pawnStates[pawn];
+            if (st.IsAtHome || st.IsInHomeLane) continue;
+            if (!IsBotPawnThreatened(pawn, botIndex)) continue;
+
+            int from = st.MainIndex;
+            int distToEntry = (homeEntry - from + pathCount) % pathCount;
+            if (roll >= distToEntry) return pawn; // enters home lane = safe
+
+            int landing = (from + roll) % pathCount;
+            if (safeSquares != null && safeSquares.IsSafeIndex(landing)) return pawn;
+        }
+
+        // ── 4. Enter new pawn on any 6 (priorities 1-3 already passed) ──
+        if (roll == 6)
+        {
+            foreach (var pawn in legal)
+                if (_pawnStates[pawn].IsAtHome) return pawn;
+        }
+
+        // ── 5. Advance the most progressed pawn ──
+        // Urgency order: threatened (needs to escape) > normal > already on safe square
+        PawnView best = null;
+        int bestProgress = -1;
+
+        // Pass A: threatened pawns — move them away from danger (IsBotPawnThreatened already returns false for safe-square pawns)
+        foreach (var pawn in legal)
+        {
+            if (!IsBotPawnThreatened(pawn, botIndex)) continue;
+            int progress = GetBotPawnProgress(pawn, botIndex);
+            if (progress > bestProgress) { bestProgress = progress; best = pawn; }
+        }
+
+        // Pass B: non-threatened pawns that are NOT already on a safe square
+        if (best == null)
+        {
+            foreach (var pawn in legal)
+            {
+                if (IsBotPawnThreatened(pawn, botIndex)) continue;
+                var st = _pawnStates[pawn];
+                bool onSafe = !st.IsAtHome && !st.IsInHomeLane
+                              && safeSquares != null && safeSquares.IsSafeIndex(st.MainIndex);
+                if (onSafe) continue;
+                int progress = GetBotPawnProgress(pawn, botIndex);
+                if (progress > bestProgress) { bestProgress = progress; best = pawn; }
+            }
+        }
+
+        // Pass C: fallback — safe-square pawns or whatever is left
+        if (best == null)
+        {
+            foreach (var pawn in legal)
+            {
+                int progress = GetBotPawnProgress(pawn, botIndex);
+                if (progress > bestProgress) { bestProgress = progress; best = pawn; }
+            }
+        }
+
+        return best ?? legal[UnityEngine.Random.Range(0, legal.Count)];
+    }
+
+    // Returns how far a pawn has traveled from its start (higher = closer to finish)
+    private int GetBotPawnProgress(PawnView pawn, int playerIndex)
+    {
+        var st = _pawnStates[pawn];
+        if (st.IsAtHome) return -1;
+        if (st.IsFinished) return 100;
+        if (st.IsInHomeLane) return 52 + st.HomeIndex;
+        TryGetStartIndexForPlayer(playerIndex, out int start);
+        return (st.MainIndex - start + 52) % 52;
+    }
+
+    // Returns true if an enemy pawn can reach this pawn's position in 1–6 rolls
+    private bool IsBotPawnThreatened(PawnView pawn, int botIndex)
+    {
+        var st = _pawnStates[pawn];
+        if (safeSquares != null && safeSquares.IsSafeIndex(st.MainIndex)) return false;
+
+        int myPos = st.MainIndex;
+        const int pathCount = 52;
+
+        foreach (var kv in _pawnStates)
+        {
+            if (_pawnOwner[kv.Key] == botIndex) continue;
+            var enemySt = kv.Value;
+            if (enemySt.IsAtHome || enemySt.IsInHomeLane || enemySt.IsFinished) continue;
+
+            int dist = (myPos - enemySt.MainIndex + pathCount) % pathCount;
+            if (dist >= 1 && dist <= 6) return true;
+        }
+        return false;
     }
 
     // ==================== BOT MODE (AFK recovery) ====================
