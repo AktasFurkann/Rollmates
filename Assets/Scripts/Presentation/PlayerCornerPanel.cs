@@ -108,6 +108,19 @@ namespace LudoFriends.Presentation
         // Emoji Float Animasyonu
         // ------------------------------------------------
 
+        private Vector2 _emojiPopupOrigin;
+        private bool _emojiPopupOriginCached;
+
+        private Vector2 GetEmojiPopupOrigin()
+        {
+            if (!_emojiPopupOriginCached && emojiPopup != null)
+            {
+                _emojiPopupOrigin = emojiPopup.GetComponent<RectTransform>().anchoredPosition;
+                _emojiPopupOriginCached = true;
+            }
+            return _emojiPopupOrigin;
+        }
+
         /// <summary>
         /// Profil üstünde kayan metin mesajı gösterir (quick chat veya normal chat).
         /// </summary>
@@ -145,7 +158,7 @@ namespace LudoFriends.Presentation
             if (emojiImage != null) emojiImage.gameObject.SetActive(true);
             if (emojiAnimator != null) emojiAnimator.Play(frames, loop: true);
 
-            StartCoroutine(FloatAndFade());
+            StartCoroutine(FloatUpAndFade());
         }
 
         private IEnumerator FloatAndFade()
@@ -170,6 +183,44 @@ namespace LudoFriends.Presentation
                 yield return null;
             }
 
+            if (emojiAnimator != null) emojiAnimator.Stop();
+            emojiPopup.SetActive(false);
+        }
+
+        // Emoji için: baloncuksuz, yukarı kayarak ve fade out
+        private IEnumerator FloatUpAndFade()
+        {
+            emojiPopup.SetActive(true);
+
+            // Baloncuk arka planını gizle — sadece emoji Image görünsün
+            var bgImage = emojiPopup.GetComponent<Image>();
+            if (bgImage != null) bgImage.enabled = false;
+
+            var cg = emojiPopup.GetComponent<CanvasGroup>();
+            if (cg == null) cg = emojiPopup.AddComponent<CanvasGroup>();
+            cg.alpha = 1f;
+
+            var rt = emojiPopup.GetComponent<RectTransform>();
+            Vector2 startPos = GetEmojiPopupOrigin();
+            if (rt != null) rt.anchoredPosition = startPos;
+
+            float duration = 2f;
+            float floatDistance = 80f;
+            float elapsed = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = elapsed / duration;
+                cg.alpha = Mathf.Lerp(1f, 0f, t);
+                if (rt != null)
+                    rt.anchoredPosition = Vector2.Lerp(startPos, startPos + Vector2.up * floatDistance, t);
+                yield return null;
+            }
+
+            // Pozisyonu ve baloncuğu sıfırla
+            if (rt != null) rt.anchoredPosition = startPos;
+            if (bgImage != null) bgImage.enabled = true;
             if (emojiAnimator != null) emojiAnimator.Stop();
             emojiPopup.SetActive(false);
         }
