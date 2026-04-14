@@ -110,6 +110,7 @@ public class GameBootstrapper : MonoBehaviour
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
     private readonly HashSet<int> _lobbyBots = new HashSet<int>();
     private bool _isBotGame = false;
+    private readonly Dictionary<int, string> _cachedPlayerNames = new Dictionary<int, string>();
     private Coroutine _botTurnCoroutine;
     private const float BotAutoDelay = 1.5f;
     private bool _waitingForReconnectState = false;
@@ -150,6 +151,7 @@ public class GameBootstrapper : MonoBehaviour
         if (_lobbyBots.Contains(playerIndex))
             return $"Bot {playerIndex}";
 
+        // Önce canlı listeden dene
         if (_bridge != null && _bridge.IsInRoom)
         {
             var players = _bridge.GetPlayers();
@@ -158,10 +160,18 @@ public class GameBootstrapper : MonoBehaviour
                 foreach (var p in players)
                 {
                     if (p.playerIndex == playerIndex && !string.IsNullOrEmpty(p.nickname))
+                    {
+                        _cachedPlayerNames[playerIndex] = p.nickname; // Önbelleğe al
                         return p.nickname;
+                    }
                 }
             }
         }
+
+        // Oyuncu çıkmışsa önbellekten al
+        if (_cachedPlayerNames.TryGetValue(playerIndex, out string cachedName))
+            return cachedName;
+
         return TurnName(playerIndex);
     }
 
@@ -1680,6 +1690,7 @@ public class GameBootstrapper : MonoBehaviour
         if (_phase != TurnPhase.AwaitMove) return;
         if (_currentRoll < 1) return;
         if (_isAnimating) return;
+        if (_localBotMode) return; // Bot taking over — player must press Take Control first
 
         // Bug 3 fix: Rapid click protection
         float timeSinceLastRequest = Time.time - _lastMoveRequestTime;
@@ -2118,6 +2129,8 @@ public class GameBootstrapper : MonoBehaviour
             }
             else
             {
+                // Singleplayer'da sayaç sıfırlanınca bot modu kalıcı kalmasın
+                if (_isBotGame) SetLocalBotMode(false);
                 if (btnRollDice != null)
                     btnRollDice.interactable = !_gameOver;
                 StartTurnTimer(rollTimeLimit);
@@ -2384,11 +2397,8 @@ public class GameBootstrapper : MonoBehaviour
         // Oyun bitmeden önce local oyuncu bitirdiyse bireysel reklam göster (1. ve 2. sıra)
         if (_finishOrder.Count < activePlayers - 1 && playerIndex == _localPlayerIndex)
         {
-            if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
-            {
-                AdManager.Instance.ShowInterstitial(() => UpdateScoreboard());
-                return;
-            }
+            AdManager.Instance?.ShowInterstitial(() => UpdateScoreboard(openPanel: true));
+            return;
         }
 
         // Son kalan oyuncuyu otomatik ekle
@@ -2416,14 +2426,8 @@ public class GameBootstrapper : MonoBehaviour
             // Oyun bitti: tüm cihazlarda reklam tetikle.
             // 1. ve 2. biten oyuncular zaten bireysel reklamlarını gördü,
             // AdManager'daki 60s cooldown onlarda tekrar çıkmasını engeller.
-            if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
-            {
-                AdManager.Instance.ShowInterstitial(() =>
-                {
-                    UpdateScoreboard();
-                });
-                return;
-            }
+            AdManager.Instance?.ShowInterstitial(() => UpdateScoreboard());
+            return;
         }
 
         UpdateScoreboard();
@@ -2451,7 +2455,7 @@ public class GameBootstrapper : MonoBehaviour
         }
     }
 
-    private void UpdateScoreboard()
+    private void UpdateScoreboard(bool openPanel = false)
     {
         if (scoreboardPanel == null) return;
 
@@ -2502,9 +2506,10 @@ public class GameBootstrapper : MonoBehaviour
             btnMainMenu.gameObject.SetActive(_gameOver && localPlayerFinished);
         }
 
-        // Spectator icin oyun bitmeden paneli acma
-        if (!_isSpectator || _gameOver)
-            scoreboardPanel.SetActive(true);
+        // Paneli sadece açıkça istendiğinde veya oyun bittiyse aç
+        if (openPanel || _gameOver)
+            if (!_isSpectator || _gameOver)
+                scoreboardPanel.SetActive(true);
     }
 
     private void OnScoreboardClose()
@@ -3377,6 +3382,7 @@ public class GameBootstrapper : MonoBehaviour
         if (_paused) return;
         if (_gameOver) return;
         if (_currentRoll < 1) return;
+        if (_localBotMode) return; // Bot taking over — player must press Take Control first
 
         // Sadece kendi siran ve kendi rengin
         int turn = _state.CurrentTurnPlayerIndex;
@@ -3417,6 +3423,7 @@ public class GameBootstrapper : MonoBehaviour
     {
         if (_paused || _gameOver || _phase != TurnPhase.AwaitMove) return;
         if (_currentRoll < 1 || _isAnimating) return;
+        if (_localBotMode) return; // Bot taking over — player must press Take Control first
         if (_state.CurrentTurnPlayerIndex != _localPlayerIndex) return;
 
         var legal = GetLegalMoves(_state.CurrentTurnPlayerIndex, _currentRoll);
@@ -3639,7 +3646,7 @@ public class GameBootstrapper : MonoBehaviour
         if (message.StartsWith("__EMOJI__"))
         {
             // Index'i coz, animasyonu oynat
-            string indexStr = message["__EMOJI__".Length..];
+            string indexStr = message["__EMOJI__".Length..].Trim();
             if (int.TryParse(indexStr, out int index))
             {
                 var frames = quickChatView != null ? quickChatView.GetFrames(index) : null;
@@ -3652,8 +3659,11 @@ public class GameBootstrapper : MonoBehaviour
                 {
                     if (frames != null && frames.Length > 0)
                         senderPanel.ShowAnimatedEmoji(frames);
+                    else
+                        senderPanel.ShowEmojiFloat("🎉"); // frames yüklenemezse fallback
                 }
             }
+            return; // __EMOJI__ mesajı kesinlikle text branch'e düşmesin
         }
         else if (message.StartsWith(LudoFriends.Presentation.QuickChatView.QuickPrefix))
         {

@@ -132,9 +132,12 @@ namespace LudoFriends.Presentation
             // Önce parent'ı aktive et — child component'lerin activeInHierarchy=true olması gerekiyor
             emojiPopup.SetActive(true);
 
-            // Metin moduna geç
-            if (txtEmoji != null)  { txtEmoji.gameObject.SetActive(true);  txtEmoji.text = text; }
-            if (emojiImage != null) emojiImage.gameObject.SetActive(false);
+            // Metin moduna geç: emojiPopup altındaki TÜM Image bileşenlerini gizle (emojiImage
+            // Inspector'da bağlı olmasa bile önceki emoji kalıntısı kalmaz)
+            foreach (var img in emojiPopup.GetComponentsInChildren<Image>(true))
+                img.gameObject.SetActive(false);
+
+            if (txtEmoji != null) { txtEmoji.gameObject.SetActive(true); txtEmoji.text = text; }
             if (emojiAnimator != null) emojiAnimator.Stop();
 
             StartCoroutine(FloatAndFade());
@@ -153,8 +156,11 @@ namespace LudoFriends.Presentation
             // activeInHierarchy=true iken çalışır; parent inactive iken sessizce başarısız olur
             emojiPopup.SetActive(true);
 
-            // Animasyon moduna geç
-            if (txtEmoji != null)   txtEmoji.gameObject.SetActive(false);
+            // Animasyon moduna geç: emojiPopup altındaki TÜM text bileşenlerini gizle
+            // (txtEmoji Inspector'da bağlı olmasa bile çalışır)
+            foreach (var tmp in emojiPopup.GetComponentsInChildren<TMPro.TextMeshProUGUI>(true))
+                tmp.gameObject.SetActive(false);
+
             if (emojiImage != null) emojiImage.gameObject.SetActive(true);
             if (emojiAnimator != null) emojiAnimator.Play(frames, loop: true);
 
@@ -204,7 +210,7 @@ namespace LudoFriends.Presentation
             Vector2 startPos = GetEmojiPopupOrigin();
             if (rt != null) rt.anchoredPosition = startPos;
 
-            float duration = 2f;
+            float duration = 2.5f;
             float floatDistance = 80f;
             float elapsed = 0f;
 
