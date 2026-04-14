@@ -20,12 +20,18 @@ public class PauseMenu : MonoBehaviour
     [SerializeField] private GameBootstrapper game; // input kilitlemek için
 
     private bool _isOpen;
+    private float _sessionStartTime;
+
+    // Reklam göstermek için oyunun en az bu kadar sürmüş olması gerekir (saniye)
+    private const float MIN_SESSION_FOR_AD = 30f;
 
     private const string PrefSfxMuted = "prefs_sfx_muted";
     private const string PrefSpeed = "prefs_speed"; // 0 normal, 1 fast
 
     private void Awake()
     {
+        _sessionStartTime = Time.realtimeSinceStartup;
+
         if (panel != null) panel.SetActive(false);
 
         if (btnResume != null) btnResume.onClick.AddListener(Resume);
@@ -94,8 +100,11 @@ public void Resume()
     {
         Time.timeScale = 1f;
 
-        // Çıkışta reklam göster, sonra ana menüye dön
-        if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
+        float sessionDuration = Time.realtimeSinceStartup - _sessionStartTime;
+        bool sessionLongEnough = sessionDuration >= MIN_SESSION_FOR_AD;
+
+        // Yalnızca yeterince uzun oynandıysa reklam göster
+        if (sessionLongEnough && AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
         {
             AdManager.Instance.ShowInterstitial(() => DoExitToMainMenu());
             return;

@@ -2403,8 +2403,9 @@ public class GameBootstrapper : MonoBehaviour
             // GPGS: Oyun bitti, skorları raporla
             ReportGameToGPGS();
 
-            // Reklam göster, sonra scoreboard aç
-            if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
+            // Sadece kazanan oyuncuda reklam göster
+            bool isLocalPlayerWinner = _finishOrder.Count > 0 && _finishOrder[0] == _localPlayerIndex;
+            if (isLocalPlayerWinner && AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
             {
                 AdManager.Instance.ShowInterstitial(() =>
                 {

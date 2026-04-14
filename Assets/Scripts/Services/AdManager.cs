@@ -27,6 +27,10 @@ namespace LudoFriends.Services
 
         private bool _isInitialized;
 
+        // Reklamlar arasındaki minimum süre (saniye). AdMob politikası gereği.
+        private const float MIN_AD_INTERVAL_SECONDS = 60f;
+        private float _lastAdShownTime = -999f;
+
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -109,8 +113,18 @@ namespace LudoFriends.Services
         public void ShowInterstitial(Action onComplete = null)
         {
 #if UNITY_ANDROID
+            float elapsed = Time.realtimeSinceStartup - _lastAdShownTime;
+            if (elapsed < MIN_AD_INTERVAL_SECONDS)
+            {
+                Debug.Log($"[AdManager] Cooldown aktif, reklam atlanıyor. Kalan: {MIN_AD_INTERVAL_SECONDS - elapsed:F0}s");
+                onComplete?.Invoke();
+                return;
+            }
+
             if (_interstitialAd != null && _interstitialAd.CanShowAd())
             {
+                _lastAdShownTime = Time.realtimeSinceStartup;
+
                 // Reklam kapandığında callback çağır
                 if (onComplete != null)
                 {
