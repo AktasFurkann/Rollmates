@@ -2381,6 +2381,16 @@ public class GameBootstrapper : MonoBehaviour
 
         int activePlayers = _initialPlayerCount;
 
+        // Oyun bitmeden önce local oyuncu bitirdiyse bireysel reklam göster (1. ve 2. sıra)
+        if (_finishOrder.Count < activePlayers - 1 && playerIndex == _localPlayerIndex)
+        {
+            if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
+            {
+                AdManager.Instance.ShowInterstitial(() => UpdateScoreboard());
+                return;
+            }
+        }
+
         // Son kalan oyuncuyu otomatik ekle
         if (_finishOrder.Count >= activePlayers - 1)
         {
@@ -2403,9 +2413,10 @@ public class GameBootstrapper : MonoBehaviour
             // GPGS: Oyun bitti, skorları raporla
             ReportGameToGPGS();
 
-            // Sadece kazanan oyuncuda reklam göster
-            bool isLocalPlayerWinner = _finishOrder.Count > 0 && _finishOrder[0] == _localPlayerIndex;
-            if (isLocalPlayerWinner && AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
+            // Oyun bitti: tüm cihazlarda reklam tetikle.
+            // 1. ve 2. biten oyuncular zaten bireysel reklamlarını gördü,
+            // AdManager'daki 60s cooldown onlarda tekrar çıkmasını engeller.
+            if (AdManager.Instance != null && AdManager.Instance.IsInterstitialReady())
             {
                 AdManager.Instance.ShowInterstitial(() =>
                 {
