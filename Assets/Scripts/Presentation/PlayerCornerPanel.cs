@@ -32,6 +32,42 @@ namespace LudoFriends.Presentation
         [SerializeField] private Image emojiImage;          // Animasyonlu emoji için Image
         [SerializeField] private EmojiAnimator emojiAnimator; // Frame animator
 
+        [Header("Mute")]
+        [SerializeField] private Button muteButton;         // Karşı oyuncuyu sustur butonu
+        [SerializeField] private GameObject mutedIcon;      // Mute olduğunda gösterilecek ikon (🔇)
+        [SerializeField] private GameObject unmutedIcon;    // Mute değilken gösterilecek ikon (🔊)
+
+        /// <summary>Bu oyuncunun sohbeti/emojisi susturuldu mu?</summary>
+        public bool IsMuted { get; private set; }
+
+        private void Awake()
+        {
+            if (muteButton != null)
+                muteButton.onClick.AddListener(ToggleMute);
+        }
+
+        private void ToggleMute()
+        {
+            IsMuted = !IsMuted;
+            RefreshMuteIcons();
+        }
+
+        private void RefreshMuteIcons()
+        {
+            if (mutedIcon != null)   mutedIcon.SetActive(IsMuted);
+            if (unmutedIcon != null) unmutedIcon.SetActive(!IsMuted);
+        }
+
+        /// <summary>
+        /// Yerel oyuncu paneli için mute butonunu gizler.
+        /// Karşı oyuncu panelleri için muteButton aktif kalır.
+        /// </summary>
+        public void SetLocalPlayer(bool isLocal)
+        {
+            if (muteButton != null)
+                muteButton.gameObject.SetActive(!isLocal);
+        }
+
         // ------------------------------------------------
 
         /// <summary>
@@ -129,16 +165,23 @@ namespace LudoFriends.Presentation
             if (emojiPopup == null) return;
             StopAllCoroutines();
 
-            // Önce parent'ı aktive et — child component'lerin activeInHierarchy=true olması gerekiyor
             emojiPopup.SetActive(true);
 
-            // Metin moduna geç: emojiPopup altındaki TÜM Image bileşenlerini gizle (emojiImage
-            // Inspector'da bağlı olmasa bile önceki emoji kalıntısı kalmaz)
+            // Tüm Image bileşenlerini aç, sadece emojiImage'ı kapat
+            // (component.enabled kullan — gameObject.SetActive değil, yoksa children kaybolur)
             foreach (var img in emojiPopup.GetComponentsInChildren<Image>(true))
-                img.gameObject.SetActive(false);
+            {
+                img.gameObject.SetActive(true);
+                img.enabled = (img != emojiImage);
+            }
 
-            if (txtEmoji != null) { txtEmoji.gameObject.SetActive(true); txtEmoji.text = text; }
             if (emojiAnimator != null) emojiAnimator.Stop();
+
+            // txtEmoji atanmamışsa dinamik bul
+            var label = txtEmoji != null
+                ? txtEmoji
+                : emojiPopup.GetComponentInChildren<TMPro.TextMeshProUGUI>(true);
+            if (label != null) { label.gameObject.SetActive(true); label.text = text; }
 
             StartCoroutine(FloatAndFade());
         }
@@ -152,12 +195,17 @@ namespace LudoFriends.Presentation
             if (emojiPopup == null || frames == null || frames.Length == 0) return;
             StopAllCoroutines();
 
-            // Önce parent'ı aktive et — EmojiAnimator.StartCoroutine ancak
-            // activeInHierarchy=true iken çalışır; parent inactive iken sessizce başarısız olur
             emojiPopup.SetActive(true);
 
-            // Animasyon moduna geç: emojiPopup altındaki TÜM text bileşenlerini gizle
-            // (txtEmoji Inspector'da bağlı olmasa bile çalışır)
+            // Tüm Image bileşenlerini kapat, sadece emojiImage'ı aç
+            // (component.enabled kullan — baloncuk arka planı dahil hepsi gizlenir)
+            foreach (var img in emojiPopup.GetComponentsInChildren<Image>(true))
+            {
+                img.gameObject.SetActive(true);
+                img.enabled = (img == emojiImage);
+            }
+
+            // Text içeriklerini gizle
             foreach (var tmp in emojiPopup.GetComponentsInChildren<TMPro.TextMeshProUGUI>(true))
                 tmp.gameObject.SetActive(false);
 
@@ -198,10 +246,6 @@ namespace LudoFriends.Presentation
         {
             emojiPopup.SetActive(true);
 
-            // Baloncuk arka planını gizle — sadece emoji Image görünsün
-            var bgImage = emojiPopup.GetComponent<Image>();
-            if (bgImage != null) bgImage.enabled = false;
-
             var cg = emojiPopup.GetComponent<CanvasGroup>();
             if (cg == null) cg = emojiPopup.AddComponent<CanvasGroup>();
             cg.alpha = 1f;
@@ -224,9 +268,7 @@ namespace LudoFriends.Presentation
                 yield return null;
             }
 
-            // Pozisyonu ve baloncuğu sıfırla
             if (rt != null) rt.anchoredPosition = startPos;
-            if (bgImage != null) bgImage.enabled = true;
             if (emojiAnimator != null) emojiAnimator.Stop();
             emojiPopup.SetActive(false);
         }

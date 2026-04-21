@@ -670,7 +670,10 @@ public class GameBootstrapper : MonoBehaviour
                     {
                         string nick = player.nickname;
                         if (!string.IsNullOrEmpty(nick))
+                        {
                             cornerNames[idx] = nick;
+                            _cachedPlayerNames[idx] = nick; // Scoreboard fallback icin onceden cache'le
+                        }
                     }
                 }
             }
@@ -1253,6 +1256,15 @@ public class GameBootstrapper : MonoBehaviour
     private void OnGamePaused(GamePausedPayload data)
     {
         if (_gameOver) return;
+
+        // Bitiren oyuncunun bağlantısı koparsa oyunu durdurma - o zaten oynamıyor
+        if (_finishOrder.Contains(data.disconnectedPlayerIndex)
+            && !_disconnectedPlayers.Contains(data.disconnectedPlayerIndex))
+        {
+            Debug.Log($"[OnGamePaused] Ignoring pause for finished player P{data.disconnectedPlayerIndex}");
+            return;
+        }
+
         _gamePaused = true;
         _paused = true; // Tum input'lari engelle
 
@@ -1371,6 +1383,31 @@ public class GameBootstrapper : MonoBehaviour
         }
 
         UpdateScoreboard();
+
+        // Pause state temizle: gecici disconnect panelinin oyuncusu timeout'a kadar geri gelmediyse
+        // paneli kapat, input'lari serbest birak. Sunucu player_permanently_left sonrasi her zaman
+        // game_resumed gondermiyor -> client tarafinda temizlemek zorundayiz.
+        if (_gamePaused)
+        {
+            _gamePaused = false;
+            _paused = false;
+
+            if (_pauseCountdownCoroutine != null)
+            {
+                StopCoroutine(_pauseCountdownCoroutine);
+                _pauseCountdownCoroutine = null;
+            }
+
+            if (panelDisconnect != null)
+                panelDisconnect.SetActive(false);
+
+            // Oyun devam ediyorsa ve host ise turn timer'i tekrar baslat
+            if (!_gameOver && _bridge != null && _bridge.IsHost)
+            {
+                float limit = (_phase == TurnPhase.AwaitRoll) ? rollTimeLimit : moveTimeLimit;
+                StartTurnTimer(limit);
+            }
+        }
 
         if (_bridge != null && _bridge.IsHost)
             _net?.SaveFinishOrder(_finishOrder.ToArray());
@@ -2394,10 +2431,14 @@ public class GameBootstrapper : MonoBehaviour
 
         int activePlayers = _initialPlayerCount;
 
-        // Oyun bitmeden önce local oyuncu bitirdiyse bireysel reklam göster (1. ve 2. sıra)
-        if (_finishOrder.Count < activePlayers - 1 && playerIndex == _localPlayerIndex)
+        // Oyun bitmeden önce birisi bitirdiyse tabloyu HERKESE göster
+        // Local finisher reklam görür, digerleri direkt scoreboard izleme modunda
+        if (_finishOrder.Count < activePlayers - 1)
         {
-            AdManager.Instance?.ShowInterstitial(() => UpdateScoreboard(openPanel: true));
+            if (playerIndex == _localPlayerIndex)
+                AdManager.Instance?.ShowInterstitial(() => UpdateScoreboard(openPanel: true));
+            else
+                UpdateScoreboard(openPanel: true);
             return;
         }
 
@@ -3643,6 +3684,10 @@ public class GameBootstrapper : MonoBehaviour
     private void OnNetworkChatMessage(string message, int senderPlayerIndex)
     {
         var senderPanel = hudView.GetCornerPanelForPlayer(senderPlayerIndex, _localPlayerIndex);
+
+        // Mute kontrolu: susturulmus oyuncunun mesajlari ve emojileri gosterilmez
+        if (senderPanel != null && senderPanel.IsMuted) return;
+
         if (message.StartsWith("__EMOJI__"))
         {
             // Index'i coz, animasyonu oynat

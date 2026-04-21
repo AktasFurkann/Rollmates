@@ -222,6 +222,7 @@ namespace LudoFriends.Presentation
                 else if (Mathf.Approximately(diff, 270f)) panel = panelCornerRight;
 
                 panel?.Show(playerNames[i], _turnColors[i]);
+                panel?.SetLocalPlayer(i == localPlayerIndex);
             }
         }
 

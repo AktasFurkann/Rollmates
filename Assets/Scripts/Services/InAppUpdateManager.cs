@@ -7,10 +7,20 @@ namespace LudoFriends.Services
     /// Google Play In-App Updates API.
     /// Uygulama açılışında güncelleme var mı kontrol eder.
     /// Varsa Google'ın native "Güncelleme gerekli" ekranını gösterir.
+    /// Sahneye elle eklemek gerekmez — RuntimeInitializeOnLoad ile kendini oluşturur.
     /// </summary>
     public class InAppUpdateManager : MonoBehaviour
     {
         public static InAppUpdateManager Instance { get; private set; }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void CreateInstance()
+        {
+            if (Instance != null) return;
+            var go = new GameObject("InAppUpdateManager");
+            go.AddComponent<InAppUpdateManager>();
+            DontDestroyOnLoad(go);
+        }
 
         private void Awake()
         {
