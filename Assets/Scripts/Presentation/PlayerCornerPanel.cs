@@ -46,9 +46,18 @@ namespace LudoFriends.Presentation
                 muteButton.onClick.AddListener(ToggleMute);
         }
 
-        private void ToggleMute()
+        public void ToggleMute()
         {
             IsMuted = !IsMuted;
+            RefreshMuteIcons();
+        }
+
+        /// <summary>
+        /// Dışarıdan (menü paneli satırları) mute state'i set etmek icin.
+        /// </summary>
+        public void SetMuted(bool muted)
+        {
+            IsMuted = muted;
             RefreshMuteIcons();
         }
 

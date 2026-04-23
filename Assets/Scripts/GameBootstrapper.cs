@@ -144,6 +144,34 @@ public class GameBootstrapper : MonoBehaviour
     private string TurnName(int index) => LocalizationManager.GetColorName(index);
 
     /// <summary>
+    /// Yerel oyuncu index'i (spectator ise -1). Pause menu mute listesi icin disari acildi.
+    /// </summary>
+    public int LocalPlayerIndexPublic => _localPlayerIndex;
+
+    /// <summary>
+    /// Pause menu mute listesi icin: yerel olmayan GERCEK oyunculari (index, isim) olarak dondur.
+    /// Botlar, bos slotlar ve cikmis oyuncular listeye dahil edilmez.
+    /// </summary>
+    public System.Collections.Generic.List<(int playerIndex, string displayName)> GetOpponentInfos()
+    {
+        var list = new System.Collections.Generic.List<(int, string)>();
+
+        // Sadece online oyunda gercek rakip vardir. Bot oyunda mute edilecek kimse yok.
+        if (_bridge == null || !_bridge.IsInRoom) return list;
+
+        var players = _bridge.GetPlayers();
+        if (players == null) return list;
+
+        foreach (var p in players)
+        {
+            if (p.playerIndex == _localPlayerIndex) continue;
+            if (string.IsNullOrEmpty(p.nickname)) continue;
+            list.Add((p.playerIndex, p.nickname));
+        }
+        return list;
+    }
+
+    /// <summary>
     /// Oyuncu adını döndürür: nickname varsa nickname, yoksa renk adı.
     /// </summary>
     private string PlayerDisplayName(int playerIndex)

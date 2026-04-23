@@ -18,6 +18,7 @@ public class PauseMenu : MonoBehaviour
     [SerializeField] private SfxPlayer sfx;
     [SerializeField] private LudoFriends.Gameplay.PawnMover pawnMover;
     [SerializeField] private GameBootstrapper game; // input kilitlemek için
+    [SerializeField] private LudoFriends.Presentation.PlayerMuteListController muteList;
 
     private bool _isOpen;
     private float _sessionStartTime;
@@ -81,6 +82,9 @@ public class PauseMenu : MonoBehaviour
 
     // ✅ sadece input kilitle
     if (game != null) game.SetPaused(true);
+
+    // Rakip oyuncu mute listesini doldur
+    if (muteList != null) muteList.Populate();
 }
 
 public void Resume()
@@ -93,6 +97,9 @@ public void Resume()
     // ❌ Time.timeScale = 1f; YOK
 
     if (game != null) game.SetPaused(false);
+
+    // Satirlari temizle (mute state corner paneller uzerinde korunur)
+    if (muteList != null) muteList.Clear();
 }
 
 
