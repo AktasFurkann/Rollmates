@@ -1171,11 +1171,16 @@ public class GameBootstrapper : MonoBehaviour
             if (!activePlayerIndices.Contains(i) && !_disconnectedPlayers.Contains(i)
                 && !_tempDisconnectedPlayers.Contains(i))
             {
-                _disconnectedPlayers.Add(i);
-                if (!_finishOrder.Contains(i))
+                // Mesru bitiren oyuncu (finishOrder'da ama disconnect set'inde yok) cikmissa
+                // disconnected olarak isaretleme. Yoksa scoreboard'da sonuna tasinir (1. yerine son).
+                if (_finishOrder.Contains(i))
                 {
-                    _finishOrder.Add(i);
+                    Debug.Log($"[RefreshDisconnectedPlayers] P{i} already legitimately finished, skip disconnect mark");
+                    continue;
                 }
+
+                _disconnectedPlayers.Add(i);
+                _finishOrder.Add(i);
                 RemoveDisconnectedPlayerPawns(i);
                 Debug.Log($"[RefreshDisconnectedPlayers] P{i} marked as disconnected");
             }
