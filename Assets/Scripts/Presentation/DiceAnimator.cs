@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using LudoFriends.Services;
 
 namespace LudoFriends.Presentation
 {
@@ -22,7 +23,34 @@ namespace LudoFriends.Presentation
         [Tooltip("Zara basılmadan önceki varsayılan görüntü (boşsa faceSprites[0] kullanılır)")]
         [SerializeField] private Sprite idleSprite;
 
+        [Tooltip("True ise Awake'de oyuncunun seçili skin'ini otomatik uygular (lokal). " +
+                 "Multiplayer roll için ApplySkin manuel çağrılmalı.")]
+        [SerializeField] private bool autoApplyLocalSkin = true;
+
         private Coroutine _coroutine;
+
+        private void Awake()
+        {
+            if (autoApplyLocalSkin)
+            {
+                var skin = DiceSkinManager.GetSelected();
+                if (skin != null) ApplySkin(skin);
+            }
+        }
+
+        /// <summary>
+        /// Skin sprite'larını runtime'da uygular. Idle varsa Hide() ile yeniden gösterilir.
+        /// </summary>
+        public void ApplySkin(DiceSkin skin)
+        {
+            if (skin == null) return;
+            if (skin.rollFrames != null && skin.rollFrames.Length > 0) rollFrames = skin.rollFrames;
+            if (skin.faceSprites != null && skin.faceSprites.Length > 0) faceSprites = skin.faceSprites;
+            idleSprite = skin.idleSprite;
+            // Idle gösteriliyorsa yeni skin'in idle'ına geç. Roll sırasında çağrılırsa görsel
+            // animasyon zaten sürdüğü için bir sonraki frame yeni rollFrames'i kullanacak.
+            if (_coroutine == null) Hide();
+        }
 
         // -----------------------------------------------
 

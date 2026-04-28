@@ -35,6 +35,7 @@ namespace LudoFriends.Networking
         public event Action<HostChangedPayload> OnHostChanged;
         public event Action<JoinFailedPayload> OnJoinFailed;
         public event Action<GameStartedPayload> OnGameStarted;
+        public event Action<DiceSkinChangedPayload> OnDiceSkinChanged;
         public event Action<CountdownTickPayload> OnCountdownTick;
         public event Action<RoomCreatedPayload> OnRoomCreated;
         public event Action OnDisconnectedEvent;
@@ -101,7 +102,8 @@ namespace LudoFriends.Networking
                 _socket.Emit("identify", new
                 {
                     playerId = NetworkConfig.PlayerId,
-                    nickname = _nickname
+                    nickname = _nickname,
+                    diceSkinId = LudoFriends.Services.DiceSkinManager.GetSelectedId()
                 });
             }
 
@@ -236,10 +238,19 @@ namespace LudoFriends.Networking
                     playerId = data.playerId,
                     playerIndex = data.playerIndex,
                     nickname = data.nickname,
-                    isConnected = true
+                    isConnected = true,
+                    diceSkinId = string.IsNullOrEmpty(data.diceSkinId) ? "default" : data.diceSkinId
                 });
                 _playerCount = _players.Count;
                 OnPlayerJoined?.Invoke(data);
+            });
+
+            _socket.OnUnityThread("dice_skin_changed", response =>
+            {
+                var data = response.GetValue<DiceSkinChangedPayload>();
+                var p = _players.Find(x => x.playerId == data.playerId);
+                if (p != null) p.diceSkinId = string.IsNullOrEmpty(data.diceSkinId) ? "default" : data.diceSkinId;
+                OnDiceSkinChanged?.Invoke(data);
             });
 
             _socket.OnUnityThread("player_left", response =>
@@ -504,6 +515,11 @@ namespace LudoFriends.Networking
         public void BroadcastChatMessage(string message, int senderPlayerIndex)
         {
             _socket?.Emit("broadcast_chat", new { message, senderPlayerIndex });
+        }
+
+        public void BroadcastDiceSkin(string diceSkinId)
+        {
+            _socket?.Emit("set_dice_skin", new { diceSkinId });
         }
 
         // ══════════════════════════════════════

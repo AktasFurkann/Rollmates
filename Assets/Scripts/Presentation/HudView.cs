@@ -135,6 +135,18 @@ namespace LudoFriends.Presentation
         }
 
         /// <summary>
+        /// Zar görünümünü verilen skin id'ye göre değiştirir. Multiplayer'da
+        /// remote bir oyuncu zar atmadan ÖNCE çağrılmalıdır.
+        /// </summary>
+        public void ApplyDiceSkin(string skinId)
+        {
+            if (diceAnimator == null) return;
+            var skin = LudoFriends.Services.DiceSkinManager.Database?.GetById(skinId);
+            if (skin == null) skin = LudoFriends.Services.DiceSkinManager.Database?.GetDefault();
+            if (skin != null) diceAnimator.ApplySkin(skin);
+        }
+
+        /// <summary>
         /// Zar roll animasyonunu başlatır (looping sprite).
         /// </summary>
         public void StartDiceRollAnimation()

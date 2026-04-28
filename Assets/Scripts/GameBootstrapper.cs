@@ -344,6 +344,9 @@ public class GameBootstrapper : MonoBehaviour
             txtInGameRoomCode.text = string.Format(LocalizationManager.Get("room_code_label"), _bridge.RoomCode);
 
         hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        // Ilk turda OnNetworkTurn cagrilmiyor (host BroadcastTurn(0) atmiyor cunku turn zaten 0).
+        // O yuzden ilk siradaki oyuncunun skin'ini burada uygulamak gerekir.
+        ApplyDiceSkinForPlayer(_state.CurrentTurnPlayerIndex);
         hudView.SetDice(-1);
 
         // Oyuncu kose panellerini kur
@@ -566,6 +569,7 @@ public class GameBootstrapper : MonoBehaviour
         _initialPlayerCount = PlayerCount;
 
         hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+        ApplyDiceSkinForPlayer(_state.CurrentTurnPlayerIndex);
         hudView.SetDice(-1);
 
         pawnSpawner.enabled = true;
@@ -602,6 +606,15 @@ public class GameBootstrapper : MonoBehaviour
 
         UpdateTurnUI();
         HighlightActivePlayerPawns();
+    }
+
+    private void Start()
+    {
+        // DiceAnimator.Awake'in autoApplyLocalSkin'i, bizim Awake'deki init'imizden
+        // SONRA calisip dogru skin'i overwrite edebilir. Start tum Awake'lerden sonra
+        // garantili calisir; burada ilk turdaki dogru oyuncunun skin'ini tekrar uygulariz.
+        ApplyDiceSkinForPlayer(_state.CurrentTurnPlayerIndex);
+        if (hudView != null) hudView.SetDice(-1);
     }
 
     private IEnumerator WaitForNetworkRoot()
@@ -1630,6 +1643,7 @@ public class GameBootstrapper : MonoBehaviour
         hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
         sfx?.PlayDice();
 
+        ApplyDiceSkinForPlayer(_state.CurrentTurnPlayerIndex);
         hudView.StartDiceRollAnimation();
         yield return new WaitForSeconds(diceRollDuration);
 
@@ -1926,10 +1940,44 @@ public class GameBootstrapper : MonoBehaviour
     }
 
     // Uzaktan gelen zar atisi icin gorsel animasyon
+    /// <summary>
+    /// Verilen oyuncunun secili dice skin'ini HUD'a uygular. Animasyon baslamadan once cagrilir.
+    /// Online'da diger oyuncularin skin'ini bridge'in player listesinden okur, offline/bot'ta default skin.
+    /// </summary>
+    private void ApplyDiceSkinForPlayer(int playerIndex)
+    {
+        if (hudView == null) return;
+        string skinId = null;
+
+        if (playerIndex == _localPlayerIndex)
+        {
+            skinId = LudoFriends.Services.DiceSkinManager.GetSelectedId();
+        }
+        else if (_bridge != null && _bridge.IsInRoom)
+        {
+            var players = _bridge.GetPlayers();
+            if (players != null)
+            {
+                foreach (var p in players)
+                {
+                    if (p.playerIndex == playerIndex && !string.IsNullOrEmpty(p.diceSkinId))
+                    {
+                        skinId = p.diceSkinId;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (string.IsNullOrEmpty(skinId)) skinId = "default";
+        hudView.ApplyDiceSkin(skinId);
+    }
+
     private IEnumerator CoRemoteDiceAnimation(int playerIndex, int finalRoll)
     {
         sfx?.PlayDice();
 
+        ApplyDiceSkinForPlayer(playerIndex);
         hudView.StartDiceRollAnimation();
         yield return new WaitForSeconds(diceRollDuration);
 
@@ -2017,6 +2065,9 @@ public class GameBootstrapper : MonoBehaviour
         _localRollPending = false;
         _currentRoll = -1;
 
+        // Yeni siradaki oyuncunun skin'ini idle'a uygula (SetDice(-1) idle sprite'i gosteriyor,
+        // skin once degisirse onceki oyuncunun sprite'i ekranda kalmaz).
+        ApplyDiceSkinForPlayer(nextPlayerIndex);
         hudView.SetDice(-1);
         hudView.SetTurn(PlayerDisplayName(nextPlayerIndex), nextPlayerIndex, _localPlayerIndex);
 
@@ -2458,6 +2509,10 @@ public class GameBootstrapper : MonoBehaviour
         _finishOrder.Add(playerIndex);
         sfx?.PlayWin();
 
+        // Bitiren oyuncunun piyonu kalmadigi icin extra turn biriktirmesin (son piyon bitirince +1 olusuyor).
+        // Aksi halde host turu bitirene geri broadcast ediyor, client "benim siram" der ama oynayacak pawn yok -> crash.
+        _extraTurnsEarned = 0;
+
         // Online: finishOrder'u kaydet (late joiner icin)
         if (_net != null && _bridge != null && _bridge.IsInRoom && _bridge.IsHost)
             _net.SaveFinishOrder(_finishOrder.ToArray());
@@ -2469,9 +2524,18 @@ public class GameBootstrapper : MonoBehaviour
         if (_finishOrder.Count < activePlayers - 1)
         {
             if (playerIndex == _localPlayerIndex)
-                AdManager.Instance?.ShowInterstitial(() => UpdateScoreboard(openPanel: true));
+            {
+                // Reklam kapandiktan SONRA scoreboard ac. Ad SDK kapanis animasyonu ile
+                // UI update carpismasin diye bir frame sonra calistir (coroutine).
+                AdManager.Instance?.ShowInterstitial(() =>
+                {
+                    StartCoroutine(DeferredUpdateScoreboardAfterAd());
+                });
+            }
             else
+            {
                 UpdateScoreboard(openPanel: true);
+            }
             return;
         }
 
@@ -2510,6 +2574,23 @@ public class GameBootstrapper : MonoBehaviour
     private void OnRestartClicked()
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    /// <summary>
+    /// Reklam callback'i sonrasi scoreboard'u bir frame gecikmeli ac.
+    /// Google Ads SDK kapanis animasyonu ile UI update'in carpismasini onler.
+    /// </summary>
+    private System.Collections.IEnumerator DeferredUpdateScoreboardAfterAd()
+    {
+        yield return null; // bir frame bekle
+        try
+        {
+            UpdateScoreboard(openPanel: true);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"[DeferredUpdateScoreboardAfterAd] UpdateScoreboard exception: {e}");
+        }
     }
 
     // ==================== SCOREBOARD ====================
@@ -2654,6 +2735,7 @@ public class GameBootstrapper : MonoBehaviour
         // Play dice animation
         hudView.SetTurn(PlayerDisplayName(botIndex), botIndex, _localPlayerIndex);
         sfx?.PlayDice();
+        ApplyDiceSkinForPlayer(botIndex);
         hudView.StartDiceRollAnimation();
         yield return new WaitForSeconds(diceRollDuration);
         hudView.SetDice(roll);

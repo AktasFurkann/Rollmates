@@ -37,6 +37,7 @@ namespace LudoFriends.Networking
         public bool isHost;
         public bool isSpectator;
         public bool isConnected;
+        public string diceSkinId;
     }
 
     [Serializable]
@@ -45,6 +46,15 @@ namespace LudoFriends.Networking
         public string playerId;
         public int playerIndex;
         public string nickname;
+        public string diceSkinId;
+    }
+
+    [Serializable]
+    public class DiceSkinChangedPayload
+    {
+        public string playerId;
+        public int playerIndex;
+        public string diceSkinId;
     }
 
     [Serializable]
