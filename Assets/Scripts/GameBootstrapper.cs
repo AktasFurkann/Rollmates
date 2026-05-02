@@ -25,6 +25,13 @@ public class GameBootstrapper : MonoBehaviour
     [SerializeField] private TMPro.TextMeshProUGUI[] scoreboardTexts; // 4 elemanli
     [SerializeField] private Button btnScoreboardClose;   // X butonu
     [SerializeField] private Button btnMainMenu;          // Ana Menu butonu
+    [SerializeField] private TMPro.TextMeshProUGUI txtCoinsEarned; // Oyun sonu coin odulu (opsiyonel)
+
+    [Header("Coin Rewards (oyun sonu)")]
+    [SerializeField] private int coinRewardFirst = 50;
+    [SerializeField] private int coinRewardSecond = 20;
+    [SerializeField] private int coinRewardThird = 10;
+    [SerializeField] private int coinRewardParticipation = 5;
 
     [Header("Disconnect UI")]
     [SerializeField] private GameObject panelDisconnect;
@@ -105,6 +112,7 @@ public class GameBootstrapper : MonoBehaviour
     private bool _localBotMode = false;
     private bool _isSpectator = false;
     private readonly List<int> _finishOrder = new List<int>();
+    private bool _coinRewardAwarded = false;
     private readonly HashSet<int> _disconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _tempDisconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
@@ -1426,6 +1434,7 @@ public class GameBootstrapper : MonoBehaviour
             if (btnRollDice != null) btnRollDice.interactable = false;
             StopTurnTimer();
             ClearAllHighlights();
+            AwardEndOfGameCoinsIfNeeded();
         }
 
         UpdateScoreboard();
@@ -2561,6 +2570,9 @@ public class GameBootstrapper : MonoBehaviour
             // GPGS: Oyun bitti, skorları raporla
             ReportGameToGPGS();
 
+            // Oyun sonu coin odulu (local oyuncu)
+            AwardEndOfGameCoinsIfNeeded();
+
             // Oyun bitti: tüm cihazlarda reklam tetikle.
             // 1. ve 2. biten oyuncular zaten bireysel reklamlarını gördü,
             // AdManager'daki 60s cooldown onlarda tekrar çıkmasını engeller.
@@ -2574,6 +2586,42 @@ public class GameBootstrapper : MonoBehaviour
     private void OnRestartClicked()
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    /// <summary>
+    /// Oyun sonu coin odulunu local oyuncuya verir. Bir kez calisir (idempotent).
+    /// Spectator'a, disconnect olmuslara ve daha onceki cagrida verildiyse vermez.
+    /// </summary>
+    private void AwardEndOfGameCoinsIfNeeded()
+    {
+        if (_coinRewardAwarded) return;
+        if (!_gameOver) return;
+        if (_isSpectator) return;
+        if (_disconnectedPlayers.Contains(_localPlayerIndex)) return;
+
+        int finishPos = _finishOrder.IndexOf(_localPlayerIndex);
+        if (finishPos < 0) return; // Local oyuncu finishOrder'da yoksa odul yok
+
+        int reward;
+        switch (finishPos)
+        {
+            case 0: reward = coinRewardFirst; break;
+            case 1: reward = coinRewardSecond; break;
+            case 2: reward = coinRewardThird; break;
+            default: reward = coinRewardParticipation; break;
+        }
+
+        if (reward <= 0) return;
+
+        CoinManager.Add(reward);
+        _coinRewardAwarded = true;
+        Debug.Log($"[CoinReward] Awarded {reward} coins (finish position {finishPos + 1})");
+
+        if (txtCoinsEarned != null)
+        {
+            txtCoinsEarned.text = $"+{reward} coin";
+            txtCoinsEarned.gameObject.SetActive(true);
+        }
     }
 
     /// <summary>
