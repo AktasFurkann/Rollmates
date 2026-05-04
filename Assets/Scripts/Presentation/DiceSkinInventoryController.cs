@@ -122,8 +122,28 @@ namespace LudoFriends.Presentation
                     break;
 
                 case DiceSkinUnlockType.Ad:
-                    Debug.Log($"[Inventory] Ad-unlock henüz implemente değil. Skin id: {skin.id}");
-                    // TODO: AdManager.ShowRewardedAd(() => { Unlock + Select + Populate });
+                    if (AdManager.Instance != null)
+                    {
+                        AdManager.Instance.ShowRewardedAd(
+                            onReward: () =>
+                            {
+                                DiceSkinManager.Unlock(skin.id);
+                                DiceSkinManager.Select(skin.id);
+                                BroadcastSelectionIfOnline(skin.id);
+                                Debug.Log($"[Inventory] '{skin.id}' rewarded ad ile açıldı");
+                                Populate();
+                            },
+                            onUnavailable: () =>
+                            {
+                                Debug.Log("[Inventory] Rewarded ad hazır değil, biraz sonra tekrar dene");
+                                // TODO: kullanıcıya "ad şu an yok, sonra dene" toast göster
+                            }
+                        );
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[Inventory] AdManager.Instance null");
+                    }
                     break;
 
                 case DiceSkinUnlockType.Iap:
