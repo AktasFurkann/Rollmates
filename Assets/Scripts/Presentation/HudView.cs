@@ -64,20 +64,8 @@ namespace LudoFriends.Presentation
 
         txtTurnInfo.color = c;
 
-        // ✅ Zar outline rengini değiştir
-        if (diceBG != null)
-        {
-            var outline = diceBG.GetComponent<Outline>();
-            if (outline != null)
-                outline.effectColor = c;
-        }
-
-        // ✅ Zar yazı outline rengini değiştir
-        if (txtDice != null)
-        {
-            txtDice.outlineColor = c;
-            txtDice.outlineWidth = 0.25f;
-        }
+        // Zar artik skin sistemini kullaniyor; oyuncu rengiyle outline boyamak gereksiz.
+        // diceBG outline ve txtDice outline'a dokunulmuyor.
 
         // ✅ Roll buton rengini değiştir
         if (rollButtonImage != null)

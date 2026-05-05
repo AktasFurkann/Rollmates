@@ -410,6 +410,7 @@ public class GameBootstrapper : MonoBehaviour
             btnTakeControl.onClick.AddListener(OnTakeControlClicked);
             btnTakeControl.gameObject.SetActive(false);
         }
+        SetTakeControlButtonLabel();
 
         InitScoreboard();
 
@@ -656,11 +657,21 @@ public class GameBootstrapper : MonoBehaviour
         InitializeGame();
     }
 
+    private void SetTakeControlButtonLabel()
+    {
+        if (btnTakeControl == null) return;
+        var txt = btnTakeControl.GetComponentInChildren<TMPro.TMP_Text>();
+        if (txt != null) txt.text = LocalizationManager.Get("take_control");
+    }
+
     private void RefreshLocalization()
     {
         // HUD turn label
         if (hudView != null && _state != null)
             hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
+
+        // Take Control button
+        SetTakeControlButtonLabel();
 
         // Scoreboard title
         UpdateScoreboard();
@@ -2619,7 +2630,7 @@ public class GameBootstrapper : MonoBehaviour
 
         if (txtCoinsEarned != null)
         {
-            txtCoinsEarned.text = $"+{reward} coin";
+            txtCoinsEarned.text = string.Format(LocalizationManager.Get("coins_earned"), reward);
             txtCoinsEarned.gameObject.SetActive(true);
         }
     }

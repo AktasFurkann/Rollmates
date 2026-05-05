@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using LudoFriends.Networking;
@@ -17,6 +18,7 @@ namespace LudoFriends.Presentation
         [SerializeField] private DiceSkinSlotView slotPrefab; // Tek slot prefab
         [SerializeField] private Button btnOpen;              // Envanteri açan buton
         [SerializeField] private Button btnClose;             // Envanteri kapatan buton
+        [SerializeField] private TMP_Text txtTitle;           // Panel başlığı (opsiyonel; localization için)
 
         private readonly List<DiceSkinSlotView> _slots = new List<DiceSkinSlotView>();
 
@@ -25,12 +27,25 @@ namespace LudoFriends.Presentation
             if (panel != null) panel.SetActive(false);
             if (btnOpen != null) btnOpen.onClick.AddListener(Open);
             if (btnClose != null) btnClose.onClick.AddListener(Close);
+            LocalizationManager.OnLanguageChanged += RefreshLocalization;
+            RefreshLocalization();
         }
 
         private void OnDestroy()
         {
             if (btnOpen != null) btnOpen.onClick.RemoveListener(Open);
             if (btnClose != null) btnClose.onClick.RemoveListener(Close);
+            LocalizationManager.OnLanguageChanged -= RefreshLocalization;
+        }
+
+        private void RefreshLocalization()
+        {
+            if (txtTitle != null) txtTitle.text = LocalizationManager.Get("inventory");
+            if (btnOpen != null)
+            {
+                var t = btnOpen.GetComponentInChildren<TMP_Text>();
+                if (t != null) t.text = LocalizationManager.Get("inventory");
+            }
         }
 
         public void Open()

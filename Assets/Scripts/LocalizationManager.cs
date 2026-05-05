@@ -68,6 +68,11 @@ public class LocalizationManager : MonoBehaviour
         { "play_with_bots",      "Botlarla Oyna" },
         { "add_bot",             "Bot Ekle +" },
         { "remove_bot",          "Bot Çıkar -" },
+        { "take_control",        "Kontrolü Al" },
+        { "inventory",           "Envanter" },
+        { "coins_earned",        "+{0} coin" },
+        { "not_enough_coins",    "Yetersiz coin" },
+        { "selected",            "Seçili" },
     };
 
     private static readonly Dictionary<string, string> _en = new()
@@ -118,6 +123,11 @@ public class LocalizationManager : MonoBehaviour
         { "play_with_bots",      "Play vs Bots" },
         { "add_bot",             "Add Bot +" },
         { "remove_bot",          "Remove Bot -" },
+        { "take_control",        "Take Control" },
+        { "inventory",           "Inventory" },
+        { "coins_earned",        "+{0} coins" },
+        { "not_enough_coins",    "Not enough coins" },
+        { "selected",            "Selected" },
     };
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
