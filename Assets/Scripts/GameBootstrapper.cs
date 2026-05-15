@@ -1350,8 +1350,9 @@ public class GameBootstrapper : MonoBehaviour
                 txtDisconnectMessage.text = $"{data.disconnectedNickname} {LocalizationManager.Get("disconnected")}";
             if (btnReconnect != null)
                 btnReconnect.gameObject.SetActive(false);
+            // Baska oyuncu icin bekleme durumunda Exit butonunu gosterme; diger oyuncular cikmasin.
             if (btnDisconnectMainMenu != null)
-                btnDisconnectMainMenu.gameObject.SetActive(true);
+                btnDisconnectMainMenu.gameObject.SetActive(false);
         }
 
         // Geri sayim baslat
