@@ -15,10 +15,20 @@ namespace LudoFriends.Services
     {
         public static AdManager Instance { get; private set; }
 
-        // AdMob ID'leri
+        // AdMob ID'leri.
+        // Editor + Development Build: Google'in resmi test ID'leri (hesabi etkilemez).
+        // Production Build: gercek prod ID'leri.
+        // Production icin Build Settings'te "Development Build" KAPALI olmali.
 #if UNITY_ANDROID
+    #if UNITY_EDITOR || DEVELOPMENT_BUILD
+        // Test IDs (always serve test ads, safe to click)
+        private const string INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-3940256099942544/1033173712";
+        private const string REWARDED_AD_UNIT_ID = "ca-app-pub-3940256099942544/5224354917";
+    #else
+        // Production IDs
         private const string INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-4853705736713696/9066643940";
         private const string REWARDED_AD_UNIT_ID = "ca-app-pub-4853705736713696/2242562717";
+    #endif
 #else
         private const string INTERSTITIAL_AD_UNIT_ID = "unused";
         private const string REWARDED_AD_UNIT_ID = "unused";

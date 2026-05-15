@@ -153,8 +153,11 @@ namespace LudoFriends.Presentation
                 if (value < 0)
                 {
                     diceAnimator.Hide();
-                    if (txtDice != null) txtDice.gameObject.SetActive(true);
-                    txtDice.text = "-";
+                    if (txtDice != null)
+                    {
+                        txtDice.gameObject.SetActive(true);
+                        txtDice.text = "-";
+                    }
                 }
                 else
                 {
@@ -162,7 +165,7 @@ namespace LudoFriends.Presentation
                     if (txtDice != null) txtDice.gameObject.SetActive(false);
                 }
             }
-            else
+            else if (txtDice != null)
             {
                 // Fallback: diceAnimator bağlı değilse eski text davranışı
                 txtDice.text = value < 0 ? "-" : value.ToString();

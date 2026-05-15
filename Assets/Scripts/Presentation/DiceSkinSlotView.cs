@@ -52,8 +52,20 @@ namespace LudoFriends.Presentation
                 {
                     switch (skin.unlockType)
                     {
-                        case DiceSkinUnlockType.Coin: txtLockCost.text = skin.unlockCost.ToString(); break;
-                        case DiceSkinUnlockType.Ad: txtLockCost.text = skin.unlockCost > 1 ? $"x{skin.unlockCost}" : ""; break;
+                        case DiceSkinUnlockType.Coin:
+                            txtLockCost.text = skin.unlockCost.ToString();
+                            break;
+                        case DiceSkinUnlockType.Ad:
+                            if (skin.unlockCost > 1)
+                            {
+                                int progress = DiceSkinManager.GetAdProgress(skin.id);
+                                txtLockCost.text = $"{progress}/{skin.unlockCost}";
+                            }
+                            else
+                            {
+                                txtLockCost.text = "";
+                            }
+                            break;
                         case DiceSkinUnlockType.Iap: txtLockCost.text = ""; break; // IAP fiyatı dinamik gelir, boş bırak
                         default: txtLockCost.text = ""; break;
                     }

@@ -12,6 +12,7 @@ namespace LudoFriends.Services
         private const string PREF_SELECTED = "dice_skin_selected";
         private const string PREF_OWNED = "dice_skin_owned"; // CSV
         private const string PREF_FIRST_LAUNCH = "dice_skin_first_launch_done";
+        private const string PREF_AD_PROGRESS_PREFIX = "dice_skin_ad_progress_"; // + skinId
         private const string DATABASE_RESOURCE_PATH = "DiceSkinDatabase";
 
         public static event System.Action<DiceSkin> OnSelectionChanged;
@@ -124,6 +125,37 @@ namespace LudoFriends.Services
         }
 
         /// <summary>
+        /// Ad ile acilan skin'ler icin izlenmis reklam sayisi.
+        /// </summary>
+        public static int GetAdProgress(string skinId)
+        {
+            if (string.IsNullOrEmpty(skinId)) return 0;
+            return PlayerPrefs.GetInt(PREF_AD_PROGRESS_PREFIX + skinId, 0);
+        }
+
+        /// <summary>
+        /// Bir reklam izlendigini kaydet. Yeni progress sayisini doner.
+        /// </summary>
+        public static int IncrementAdProgress(string skinId)
+        {
+            if (string.IsNullOrEmpty(skinId)) return 0;
+            int next = GetAdProgress(skinId) + 1;
+            PlayerPrefs.SetInt(PREF_AD_PROGRESS_PREFIX + skinId, next);
+            PlayerPrefs.Save();
+            return next;
+        }
+
+        /// <summary>
+        /// Skin acildiktan sonra progress'i sifirla (next time icin temiz baslangic).
+        /// </summary>
+        public static void ResetAdProgress(string skinId)
+        {
+            if (string.IsNullOrEmpty(skinId)) return;
+            PlayerPrefs.DeleteKey(PREF_AD_PROGRESS_PREFIX + skinId);
+            PlayerPrefs.Save();
+        }
+
+        /// <summary>
         /// Debug: tüm dice skin state'ini siler. Sonraki erişimde first-launch yeniden çalışır,
         /// sadece default skin owned olur.
         /// </summary>
@@ -132,6 +164,15 @@ namespace LudoFriends.Services
             PlayerPrefs.DeleteKey(PREF_SELECTED);
             PlayerPrefs.DeleteKey(PREF_OWNED);
             PlayerPrefs.DeleteKey(PREF_FIRST_LAUNCH);
+            // Tum skin'lerin ad progress'ini sil
+            var db = Database;
+            if (db != null && db.skins != null)
+            {
+                foreach (var s in db.skins)
+                {
+                    if (s != null) PlayerPrefs.DeleteKey(PREF_AD_PROGRESS_PREFIX + s.id);
+                }
+            }
             PlayerPrefs.Save();
             Debug.Log("[DiceSkinManager] Debug reset. Next access will re-grant default.");
         }

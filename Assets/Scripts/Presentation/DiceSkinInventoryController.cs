@@ -139,13 +139,23 @@ namespace LudoFriends.Presentation
                 case DiceSkinUnlockType.Ad:
                     if (AdManager.Instance != null)
                     {
+                        int required = Mathf.Max(1, skin.unlockCost);
                         AdManager.Instance.ShowRewardedAd(
                             onReward: () =>
                             {
-                                DiceSkinManager.Unlock(skin.id);
-                                DiceSkinManager.Select(skin.id);
-                                BroadcastSelectionIfOnline(skin.id);
-                                Debug.Log($"[Inventory] '{skin.id}' rewarded ad ile açıldı");
+                                int progress = DiceSkinManager.IncrementAdProgress(skin.id);
+                                if (progress >= required)
+                                {
+                                    DiceSkinManager.Unlock(skin.id);
+                                    DiceSkinManager.Select(skin.id);
+                                    DiceSkinManager.ResetAdProgress(skin.id);
+                                    BroadcastSelectionIfOnline(skin.id);
+                                    Debug.Log($"[Inventory] '{skin.id}' acildi ({progress}/{required} ad izlendi)");
+                                }
+                                else
+                                {
+                                    Debug.Log($"[Inventory] '{skin.id}' progress: {progress}/{required}");
+                                }
                                 Populate();
                             },
                             onUnavailable: () =>
