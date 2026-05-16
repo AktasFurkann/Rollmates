@@ -117,6 +117,8 @@ public class GameBootstrapper : MonoBehaviour
     private readonly HashSet<int> _tempDisconnectedPlayers = new HashSet<int>();
     private readonly HashSet<int> _botPlayers = new HashSet<int>();
     private readonly HashSet<int> _lobbyBots = new HashSet<int>();
+    private readonly Dictionary<int, string> _lobbyBotNames = new Dictionary<int, string>();
+    private readonly Dictionary<int, string> _lobbyBotSkins = new Dictionary<int, string>();
     private bool _isBotGame = false;
     private readonly Dictionary<int, string> _cachedPlayerNames = new Dictionary<int, string>();
     private Coroutine _botTurnCoroutine;
@@ -185,7 +187,12 @@ public class GameBootstrapper : MonoBehaviour
     private string PlayerDisplayName(int playerIndex)
     {
         if (_lobbyBots.Contains(playerIndex))
-            return $"Bot {playerIndex}";
+        {
+            // Gercekci kullanici adi (generate edilmis)
+            if (_lobbyBotNames.TryGetValue(playerIndex, out string botName) && !string.IsNullOrEmpty(botName))
+                return botName;
+            return TurnName(playerIndex); // fallback: renk ismi
+        }
 
         // Önce canlı listeden dene
         if (_bridge != null && _bridge.IsInRoom)
@@ -258,8 +265,29 @@ public class GameBootstrapper : MonoBehaviour
             _localPlayerIndex = 0;
             _initialPlayerCount = BotGameConfig.TotalPlayers;
 
+            string[] botNames = BotGameConfig.BotNames;
+            var skinDb = LudoFriends.Services.DiceSkinManager.Database;
+            var skinList = skinDb != null ? skinDb.skins : null;
+            var rng = new System.Random();
+
             for (int i = 1; i < BotGameConfig.TotalPlayers; i++)
+            {
                 _lobbyBots.Add(i);
+                // BotGameConfig.BotNames[0] = ilk bot (playerIndex 1)
+                int nameIdx = i - 1;
+                string name = (botNames != null && nameIdx < botNames.Length && !string.IsNullOrEmpty(botNames[nameIdx]))
+                    ? botNames[nameIdx]
+                    : LudoFriends.Services.BotNameGenerator.Generate();
+                _lobbyBotNames[i] = name;
+
+                // Random skin from database (her bot icin farkli olabilir)
+                if (skinList != null && skinList.Count > 0)
+                {
+                    var randomSkin = skinList[rng.Next(skinList.Count)];
+                    if (randomSkin != null && !string.IsNullOrEmpty(randomSkin.id))
+                        _lobbyBotSkins[i] = randomSkin.id;
+                }
+            }
 
             BotGameConfig.Reset();
 
@@ -740,9 +768,9 @@ public class GameBootstrapper : MonoBehaviour
         }
         else
         {
-            // Offline / bot mod: renk adlari + bot isimleri
+            // Offline / bot mod: PlayerDisplayName generated bot isimleri veya renk adlari doner
             for (int i = 0; i < 4; i++)
-                cornerNames[i] = _lobbyBots.Contains(i) ? $"Bot {i}" : TurnName(i);
+                cornerNames[i] = PlayerDisplayName(i);
         }
 
         hudView.SetupPlayerCorners(cornerNames, _localPlayerIndex, PlayerCount);
@@ -1989,6 +2017,11 @@ public class GameBootstrapper : MonoBehaviour
                 }
             }
         }
+        else if (_lobbyBotSkins.TryGetValue(playerIndex, out string botSkin) && !string.IsNullOrEmpty(botSkin))
+        {
+            // Offline bot: rastgele atanmis skin
+            skinId = botSkin;
+        }
 
         if (string.IsNullOrEmpty(skinId)) skinId = "default";
         hudView.ApplyDiceSkin(skinId);
@@ -2260,6 +2293,8 @@ public class GameBootstrapper : MonoBehaviour
         }
         else if (_bridge == null || !_bridge.IsInRoom)
         {
+            // Yeni siradaki oyuncunun skin'ini idle'a uygula (yoksa onceki oyuncunun skin'i kalir).
+            ApplyDiceSkinForPlayer(_state.CurrentTurnPlayerIndex);
             hudView.SetDice(-1);
             hudView.SetTurn(PlayerDisplayName(_state.CurrentTurnPlayerIndex), _state.CurrentTurnPlayerIndex, _localPlayerIndex);
 

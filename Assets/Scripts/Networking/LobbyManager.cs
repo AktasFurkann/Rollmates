@@ -65,6 +65,13 @@ public class LobbyManager : MonoBehaviour
     private bool _isBotLobby = false;
     private int _botCount = 0;
     private const int MaxBots = 3; // max 3 bots + 1 human = 4
+    private readonly System.Collections.Generic.List<string> _botNames = new System.Collections.Generic.List<string>();
+
+    // Auto-bot fill (cold start)
+    [Header("Auto-bot Fill (Cold Start)")]
+    [SerializeField] private float autoBotFillTimeoutSeconds = 15f;
+    [SerializeField] private int autoBotFillCount = 3;
+    private Coroutine _autoBotFillCoroutine;
 
     private readonly Color[] _playerColors = new Color[]
     {
@@ -351,6 +358,11 @@ public class LobbyManager : MonoBehaviour
         switch (data.reason)
         {
             case "no_rooms_available":
+                // Random join icin hic public oda yok -> otomatik public oda yarat.
+                // Tek basina kalirsa 15s sonra CountdownAndStart bot fallback'i tetikler.
+                Debug.Log("[LobbyManager] No public rooms; creating new public room (auto-bot fill standby)");
+                CreateRoom(isPrivate: false);
+                return;
             case "room_not_found":
                 _currentStatus = LobbyStatus.RoomNotFound;
                 txtStatus.text = LocalizationManager.Get("room_not_found");
@@ -494,6 +506,13 @@ public class LobbyManager : MonoBehaviour
             return;
         }
 
+        // Countdown coroutine'i durdur (auto-bot fallback yarisma kosulunu onler)
+        if (_countdownCoroutine != null)
+        {
+            StopCoroutine(_countdownCoroutine);
+            _countdownCoroutine = null;
+        }
+
         if (_bridge != null && _bridge.IsInRoom)
             _bridge.LeaveRoom(true);
 
@@ -586,15 +605,37 @@ public class LobbyManager : MonoBehaviour
         }
         else
         {
-            if (txtCountdown != null)
-            {
-                _currentStatus = LobbyStatus.NotEnoughPlayers;
-                txtCountdown.text = LocalizationManager.Get("not_enough_players");
-            }
-
-            _gameStarted = false;
-            _countdownCoroutine = StartCoroutine(CountdownAndStart());
+            // Cold start: gercek oyuncu bulunamadi -> sessizce bot game'e fallback
+            StartAutoBotFallback();
         }
+    }
+
+    /// <summary>
+    /// Bekleyen tek oyuncuya kimse katilmadiysa server'dan ayril, bot'larla offline oyun baslat.
+    /// Yeni oyuncu icin "kimse yok" deneyimini onler.
+    /// </summary>
+    private void StartAutoBotFallback()
+    {
+        int botCount = Mathf.Clamp(autoBotFillCount, 1, MaxBots);
+        var names = LudoFriends.Services.BotNameGenerator.GenerateMany(botCount);
+
+        // Server'dan ayril
+        if (_bridge != null)
+        {
+            if (_bridge.IsInRoom) _bridge.LeaveRoom(true);
+            _bridge.Disconnect();
+        }
+
+        BotGameConfig.IsActive = true;
+        BotGameConfig.TotalPlayers = botCount + 1;
+        BotGameConfig.BotNames = names;
+
+        Debug.Log($"[AutoBotFill] Cold start fallback. {botCount + 1} players (1 human + {botCount} bots) | Names: {string.Join(", ", names)}");
+
+        if (sfxSource != null && gameStartSound != null)
+            sfxSource.PlayOneShot(gameStartSound);
+
+        SceneManager.LoadScene(gameSceneName);
     }
 
     // ==================== UI HELPERS ====================
@@ -682,7 +723,10 @@ public class LobbyManager : MonoBehaviour
             if (playerSlotImages != null && slotIndex < playerSlotImages.Length)
                 playerSlotImages[slotIndex].color = _playerColors[slotIndex];
             if (playerSlotNames != null && slotIndex < playerSlotNames.Length)
-                playerSlotNames[slotIndex].text = $"{LocalizationManager.GetColorName(slotIndex)}: Bot {slotIndex}";
+            {
+                string botName = (i < _botNames.Count) ? _botNames[i] : $"Player{slotIndex}";
+                playerSlotNames[slotIndex].text = $"{LocalizationManager.GetColorName(slotIndex)}: {botName}";
+            }
         }
 
         // Update button states
@@ -754,6 +798,7 @@ public class LobbyManager : MonoBehaviour
     {
         _isBotLobby = true;
         _botCount = 0;
+        _botNames.Clear();
 
         // UI: panelButtons gizle, panelWaiting göster
         if (panelButtons != null) panelButtons.SetActive(false);
@@ -786,6 +831,7 @@ public class LobbyManager : MonoBehaviour
     {
         _isBotLobby = false;
         _botCount = 0;
+        _botNames.Clear();
 
         // Sunucuya hiç bağlanmadık, MainMenu'ye dön
         SceneManager.LoadScene("MainMenu");
@@ -797,7 +843,8 @@ public class LobbyManager : MonoBehaviour
         if (_botCount >= MaxBots) return;
 
         _botCount++;
-        Debug.Log($"[LobbyManager] Bot added. Total: 1 human + {_botCount} bots");
+        _botNames.Add(LudoFriends.Services.BotNameGenerator.Generate());
+        Debug.Log($"[LobbyManager] Bot added. Total: 1 human + {_botCount} bots. Name: {_botNames[_botNames.Count - 1]}");
         UpdatePlayerList();
     }
 
@@ -807,6 +854,7 @@ public class LobbyManager : MonoBehaviour
         if (_botCount <= 0) return;
 
         _botCount--;
+        if (_botNames.Count > 0) _botNames.RemoveAt(_botNames.Count - 1);
         Debug.Log($"[LobbyManager] Bot removed. Total: 1 human + {_botCount} bots");
         UpdatePlayerList();
     }
@@ -827,8 +875,9 @@ public class LobbyManager : MonoBehaviour
 
         BotGameConfig.IsActive = true;
         BotGameConfig.TotalPlayers = totalPlayers;
+        BotGameConfig.BotNames = _botNames.ToArray();
 
-        Debug.Log($"[LobbyManager] Starting bot game: {totalPlayers} players ({_botCount} bots)");
+        Debug.Log($"[LobbyManager] Starting bot game: {totalPlayers} players ({_botCount} bots) | Names: {string.Join(", ", _botNames)}");
 
         if (sfxSource != null && gameStartSound != null)
             sfxSource.PlayOneShot(gameStartSound);

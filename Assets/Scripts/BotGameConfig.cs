@@ -15,12 +15,16 @@ namespace LudoFriends.Networking
         /// <summary>Set by MainMenu to tell LobbyManager to skip server connection and enter bot lobby.</summary>
         public static bool PendingBotLobby { get; set; }
 
+        /// <summary>Bot oyunda kullanilacak isimler. Index 0 = local oyuncu degil, ilk bot (playerIndex 1). Length = TotalPlayers - 1.</summary>
+        public static string[] BotNames { get; set; }
+
         /// <summary>Reset after the game starts to avoid leaking into future sessions.</summary>
         public static void Reset()
         {
             IsActive = false;
             TotalPlayers = 0;
             PendingBotLobby = false;
+            BotNames = null;
         }
     }
 }
