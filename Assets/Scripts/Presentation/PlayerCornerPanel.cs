@@ -31,6 +31,7 @@ namespace LudoFriends.Presentation
         [SerializeField] private TextMeshProUGUI txtEmoji;  // Metin mesajları için TMP
         [SerializeField] private Image emojiImage;          // Animasyonlu emoji için Image
         [SerializeField] private EmojiAnimator emojiAnimator; // Frame animator
+        [SerializeField] private float animatedEmojiScale = 2f; // Animated emoji boyut carpani
 
         [Header("Mute")]
         [SerializeField] private Button muteButton;         // Karşı oyuncuyu sustur butonu
@@ -218,7 +219,11 @@ namespace LudoFriends.Presentation
             foreach (var tmp in emojiPopup.GetComponentsInChildren<TMPro.TextMeshProUGUI>(true))
                 tmp.gameObject.SetActive(false);
 
-            if (emojiImage != null) emojiImage.gameObject.SetActive(true);
+            if (emojiImage != null)
+            {
+                emojiImage.gameObject.SetActive(true);
+                emojiImage.transform.localScale = Vector3.one * animatedEmojiScale;
+            }
             if (emojiAnimator != null) emojiAnimator.Play(frames, loop: true);
 
             StartCoroutine(FloatUpAndFade());
@@ -263,7 +268,7 @@ namespace LudoFriends.Presentation
             Vector2 startPos = GetEmojiPopupOrigin();
             if (rt != null) rt.anchoredPosition = startPos;
 
-            float duration = 2.5f;
+            float duration = 4.5f;
             float floatDistance = 80f;
             float elapsed = 0f;
 
