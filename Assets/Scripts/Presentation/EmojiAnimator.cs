@@ -11,7 +11,7 @@ namespace LudoFriends.Presentation
     public class EmojiAnimator : MonoBehaviour
     {
         [SerializeField] private Image targetImage;
-        [SerializeField] private float fps = 12f;
+        [SerializeField] private float fps = 24f;
 
         private Coroutine _coroutine;
 

@@ -239,7 +239,8 @@ namespace LudoFriends.Networking
                     playerIndex = data.playerIndex,
                     nickname = data.nickname,
                     isConnected = true,
-                    diceSkinId = string.IsNullOrEmpty(data.diceSkinId) ? "default" : data.diceSkinId
+                    diceSkinId = string.IsNullOrEmpty(data.diceSkinId) ? "default" : data.diceSkinId,
+                    isBot = data.isBot
                 });
                 _playerCount = _players.Count;
                 OnPlayerJoined?.Invoke(data);

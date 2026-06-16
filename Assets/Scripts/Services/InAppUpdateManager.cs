@@ -35,8 +35,10 @@ namespace LudoFriends.Services
 
         private void Start()
         {
+            // Google Play In-App Updates devre dışı — yerine VersionCheckManager kullanılıyor.
+            // (Sunucu tabanlı kontrol daha güvenilir; Play API edge case'leri var.)
 #if UNITY_ANDROID && !UNITY_EDITOR
-            CheckForUpdate();
+            // CheckForUpdate();
 #endif
         }
 

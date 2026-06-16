@@ -38,6 +38,7 @@ namespace LudoFriends.Networking
         public bool isSpectator;
         public bool isConnected;
         public string diceSkinId;
+        public bool isBot;      // server-injected bot (eski sunucuda alan yoksa JSON'da olmaz → default false)
     }
 
     [Serializable]
@@ -47,6 +48,7 @@ namespace LudoFriends.Networking
         public int playerIndex;
         public string nickname;
         public string diceSkinId;
+        public bool isBot;      // server-injected bot
     }
 
     [Serializable]

@@ -73,6 +73,16 @@ public class LocalizationManager : MonoBehaviour
         { "coins_earned",        "+{0} coin" },
         { "not_enough_coins",    "Yetersiz coin" },
         { "selected",            "Seçili" },
+        { "update_available",    "Güncelleme Mevcut" },
+        { "update_now",          "Güncelle" },
+        { "update_later",        "Sonra" },
+        { "update_force_msg",    "Devam etmek için lütfen güncelleyin." },
+        { "update_default_msg",  "Yeni bir sürüm hazır." },
+        { "version_label",       "Sürüm {0}" },
+        { "version_check_latest","En son sürüm ✓" },
+        { "settings_title",      "AYARLAR" },
+        { "music_label",         "Müzik" },
+        { "sfx_label",           "Ses Efektleri" },
     };
 
     private static readonly Dictionary<string, string> _en = new()
@@ -128,6 +138,16 @@ public class LocalizationManager : MonoBehaviour
         { "coins_earned",        "+{0} coins" },
         { "not_enough_coins",    "Not enough coins" },
         { "selected",            "Selected" },
+        { "update_available",    "Update Available" },
+        { "update_now",          "Update" },
+        { "update_later",        "Later" },
+        { "update_force_msg",    "Please update to continue." },
+        { "update_default_msg",  "A new version is available." },
+        { "version_label",       "Version {0}" },
+        { "version_check_latest","Latest version ✓" },
+        { "settings_title",      "SETTINGS" },
+        { "music_label",         "Music" },
+        { "sfx_label",           "Sound Effects" },
     };
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]

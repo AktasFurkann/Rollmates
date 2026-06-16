@@ -1,3 +1,5 @@
+using System.Collections;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
@@ -26,6 +28,9 @@ namespace LudoFriends.Presentation
         [SerializeField] private Slider sliderMusic;
         [SerializeField] private Slider sliderSfx;
         [SerializeField] private Button btnCloseSettings;
+        [SerializeField] private TextMeshProUGUI txtSettingsTitle;  // "AYARLAR" / "SETTINGS"
+        [SerializeField] private TextMeshProUGUI txtMusicLabel;     // "Müzik" / "Music"
+        [SerializeField] private TextMeshProUGUI txtSfxLabel;       // "Ses Efektleri" / "Sound Effects"
 
         [Header("Language")]
         [SerializeField] private Button btnLanguageTR;
@@ -35,6 +40,17 @@ namespace LudoFriends.Presentation
         [SerializeField] private AudioSource musicSource;
         [SerializeField] private AudioClip clickSound;       // ✅ YENİ
         [SerializeField] private AudioSource sfxSource;       // ✅ YENİ
+
+        [Header("Version Update")]
+        [SerializeField] private GameObject versionUpdatePanel;
+        [SerializeField] private Button btnUpdate;
+        [SerializeField] private Button btnLater;
+        [SerializeField] private TextMeshProUGUI txtUpdateTitle;
+        [SerializeField] private TextMeshProUGUI txtUpdateMessage;
+        [SerializeField] private Button btnVersionLabel;     // Settings altındaki "Sürüm 1.1.0" tap-to-check
+        [SerializeField] private TextMeshProUGUI lblVersion;
+
+        private VersionCheckResult _cachedVersionResult;
 
         private void Awake()
         {
@@ -80,6 +96,145 @@ namespace LudoFriends.Presentation
                 GPGSManager.Instance.OnAuthChanged += OnGPGSAuthChanged;
 
             UpdateSignInUI();
+
+            // Version update modal başta kapalı
+            if (versionUpdatePanel != null)
+                versionUpdatePanel.SetActive(false);
+
+            if (btnUpdate != null) btnUpdate.onClick.AddListener(OnUpdateClicked);
+            if (btnLater != null) btnLater.onClick.AddListener(OnLaterClicked);
+            if (btnVersionLabel != null) btnVersionLabel.onClick.AddListener(OnVersionLabelClicked);
+
+            RefreshVersionLabel();
+            RefreshSettingsTexts();
+
+            // Dil değiştiğinde TMP'leri tazele (PNG butonların yazısı değişmez — onlar sprite'da gömülü)
+            LocalizationManager.OnLanguageChanged += OnLanguageChanged;
+        }
+
+        private void OnLanguageChanged()
+        {
+            RefreshVersionLabel();
+            RefreshSettingsTexts();
+            // Modal açıksa mesajı yeni dile göre tazele
+            if (versionUpdatePanel != null && versionUpdatePanel.activeSelf
+                && _cachedVersionResult != null && txtUpdateMessage != null)
+            {
+                txtUpdateMessage.text = _cachedVersionResult.ForceUpdate
+                    ? LocalizationManager.Get("update_force_msg")
+                    : _cachedVersionResult.GetLocalizedMessage();
+            }
+        }
+
+        private void RefreshSettingsTexts()
+        {
+            if (txtSettingsTitle != null) txtSettingsTitle.text = LocalizationManager.Get("settings_title");
+            if (txtMusicLabel != null)    txtMusicLabel.text    = LocalizationManager.Get("music_label");
+            if (txtSfxLabel != null)      txtSfxLabel.text      = LocalizationManager.Get("sfx_label");
+        }
+
+        private void Start()
+        {
+            // VersionCheckManager AfterSceneLoad'da bootstrap olur — bu sahne yüklendikten sonra
+            // sonuç hazır olabilir (cache) veya event'le sonra gelir.
+            if (VersionCheckManager.Instance == null) return;
+
+            if (VersionCheckManager.Instance.IsCheckCompleted)
+            {
+                HandleVersionResult(VersionCheckManager.Instance.LastResult);
+            }
+            else
+            {
+                VersionCheckManager.Instance.OnVersionCheckCompleted += HandleVersionResult;
+            }
+        }
+
+        private void HandleVersionResult(VersionCheckResult result)
+        {
+            _cachedVersionResult = result;
+            if (result == null) return;
+            if (!VersionCheckManager.Instance.ShouldShowModal(result)) return;
+            ShowUpdateModal(result);
+        }
+
+        private void ShowUpdateModal(VersionCheckResult result)
+        {
+            if (versionUpdatePanel == null) return;
+
+            versionUpdatePanel.SetActive(true);
+
+            // Title sahnede varsa lokalize et; yoksa (PNG ile gömülü olabilir) atla
+            if (txtUpdateTitle != null)
+                txtUpdateTitle.text = LocalizationManager.Get("update_available");
+
+            if (txtUpdateMessage != null)
+            {
+                txtUpdateMessage.text = result.ForceUpdate
+                    ? LocalizationManager.Get("update_force_msg")
+                    : result.GetLocalizedMessage();
+            }
+
+            // Force update'te "Sonra" gizli
+            if (btnLater != null)
+                btnLater.gameObject.SetActive(!result.ForceUpdate);
+        }
+
+        private void OnUpdateClicked()
+        {
+            PlayClick();
+            string url = _cachedVersionResult != null && !string.IsNullOrEmpty(_cachedVersionResult.StoreUrl)
+                ? _cachedVersionResult.StoreUrl
+                : "https://play.google.com/store/apps/details?id=com.rollmates.game";
+            Application.OpenURL(url);
+            // Force update'te paneli kapatma — kullanıcı geri dönerse hala bloklu kalsın
+        }
+
+        private void OnLaterClicked()
+        {
+            PlayClick();
+            VersionCheckManager.Instance?.PostponeUpdate();
+            if (versionUpdatePanel != null)
+                versionUpdatePanel.SetActive(false);
+        }
+
+        private void OnVersionLabelClicked()
+        {
+            PlayClick();
+            if (VersionCheckManager.Instance == null) return;
+            VersionCheckManager.Instance.OnVersionCheckCompleted -= OnManualCheckCompleted;
+            VersionCheckManager.Instance.OnVersionCheckCompleted += OnManualCheckCompleted;
+            VersionCheckManager.Instance.CheckNow();
+        }
+
+        private void OnManualCheckCompleted(VersionCheckResult result)
+        {
+            VersionCheckManager.Instance.OnVersionCheckCompleted -= OnManualCheckCompleted;
+            _cachedVersionResult = result;
+
+            if (result != null && result.UpdateAvailable)
+            {
+                // Manuel kontrolde cooldown'u bypass et — kullanıcı zaten bilerek istedi
+                ShowUpdateModal(result);
+            }
+            else
+            {
+                StartCoroutine(ShowLatestVersionFeedback());
+            }
+        }
+
+        private IEnumerator ShowLatestVersionFeedback()
+        {
+            if (lblVersion == null) yield break;
+            string original = lblVersion.text;
+            lblVersion.text = LocalizationManager.Get("version_check_latest");
+            yield return new WaitForSeconds(1.5f);
+            lblVersion.text = original;
+        }
+
+        private void RefreshVersionLabel()
+        {
+            if (lblVersion != null)
+                lblVersion.text = string.Format(LocalizationManager.Get("version_label"), Application.version);
         }
 
         private void OnPlayClicked()
@@ -183,6 +338,14 @@ namespace LudoFriends.Presentation
 
             if (GPGSManager.Instance != null)
                 GPGSManager.Instance.OnAuthChanged -= OnGPGSAuthChanged;
+
+            if (VersionCheckManager.Instance != null)
+            {
+                VersionCheckManager.Instance.OnVersionCheckCompleted -= HandleVersionResult;
+                VersionCheckManager.Instance.OnVersionCheckCompleted -= OnManualCheckCompleted;
+            }
+
+            LocalizationManager.OnLanguageChanged -= OnLanguageChanged;
         }
 
         private void PlayClick()
