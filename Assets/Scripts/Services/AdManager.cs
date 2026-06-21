@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using System;
 using System.Collections.Generic;
 #if UNITY_ANDROID
@@ -24,22 +25,31 @@ namespace LudoFriends.Services
         // Test IDs (always serve test ads, safe to click)
         private const string INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-3940256099942544/1033173712";
         private const string REWARDED_AD_UNIT_ID = "ca-app-pub-3940256099942544/5224354917";
+        private const string BANNER_AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111";
     #else
         // Production IDs
         private const string INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-4853705736713696/9066643940";
         private const string REWARDED_AD_UNIT_ID = "ca-app-pub-4853705736713696/2242562717";
+        private const string BANNER_AD_UNIT_ID = "ca-app-pub-4853705736713696/7938321457";
     #endif
 #else
         private const string INTERSTITIAL_AD_UNIT_ID = "unused";
         private const string REWARDED_AD_UNIT_ID = "unused";
+        private const string BANNER_AD_UNIT_ID = "unused";
 #endif
+
+        // Banner yalnizca bu sahnede (oyun ekrani) gosterilir.
+        private const string GAME_SCENE_NAME = "Main";
 
 #if UNITY_ANDROID
         private InterstitialAd _interstitialAd;
         private RewardedAd _rewardedAd;
+        private BannerView _bannerView;
 #endif
 
         private bool _isInitialized;
+        // Banner su an gosterilmek isteniyor mu (oyun sahnesindeyiz mi)? Init gec gelirse buna gore yuklenir.
+        private bool _bannerWanted;
 
         // Reklamlar arasındaki minimum süre (saniye). AdMob politikası gereği.
         // Rewarded reklamlar bu cooldown'a tabi değildir (kullanıcı bilinçli izliyor).
@@ -66,6 +76,25 @@ namespace LudoFriends.Services
             }
             Instance = this;
             DontDestroyOnLoad(gameObject);
+
+            // Sahne degisimlerini dinle: yalnizca oyun sahnesinde banner goster.
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            // AdManager oyun sahnesinde dogmus olabilir (ya da zaten oradayiz) — mevcut sahneyi de kontrol et.
+            _bannerWanted = SceneManager.GetActiveScene().name == GAME_SCENE_NAME;
+        }
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (scene.name == GAME_SCENE_NAME)
+            {
+                _bannerWanted = true;
+                LoadAndShowBanner();
+            }
+            else
+            {
+                _bannerWanted = false;
+                DestroyBanner();
+            }
         }
 
         private void Start()
@@ -99,6 +128,8 @@ namespace LudoFriends.Services
                 _isInitialized = true;
                 LoadInterstitialAd();
                 LoadRewardedAd();
+                // Init gec geldiyse ve oyun sahnesindeysek banner'i simdi yukle.
+                if (_bannerWanted) LoadAndShowBanner();
             });
 #endif
         }
@@ -299,8 +330,50 @@ namespace LudoFriends.Services
 #endif
         }
 
+        // ====================== BANNER ======================
+
+        /// <summary>
+        /// Alt banner reklamini yukler ve gosterir. Yalnizca oyun sahnesinde cagrilir.
+        /// SDK hazir degilse sessizce gecer (init sonrasi _bannerWanted ile tekrar denenir).
+        /// </summary>
+        public void LoadAndShowBanner()
+        {
+#if UNITY_ANDROID
+            if (!_isInitialized) return;          // init bekleniyor; OnInit'te tekrar denenecek
+            if (_bannerView != null) return;      // zaten yuklu/gosteriliyor
+
+            // Ekran genisligine uyan adaptif banner, en altta sabit.
+            AdSize adaptiveSize = AdSize.GetCurrentOrientationAnchoredAdaptiveBannerAdSizeWithWidth(AdSize.FullWidth);
+            _bannerView = new BannerView(BANNER_AD_UNIT_ID, adaptiveSize, AdPosition.Bottom);
+
+            _bannerView.OnBannerAdLoaded += () =>
+                RunOnMainThread(() => Debug.Log("[AdManager] Banner yuklendi."));
+            _bannerView.OnBannerAdLoadFailed += (LoadAdError error) =>
+                RunOnMainThread(() => Debug.LogWarning($"[AdManager] Banner yuklenemedi: {error}"));
+
+            _bannerView.LoadAd(new AdRequest());
+            Debug.Log("[AdManager] Banner yukleme istegi gonderildi.");
+#endif
+        }
+
+        /// <summary>
+        /// Banner'i yok eder (oyun sahnesinden cikilinca). Bellek/gorunum temizligi.
+        /// </summary>
+        public void DestroyBanner()
+        {
+#if UNITY_ANDROID
+            if (_bannerView != null)
+            {
+                _bannerView.Destroy();
+                _bannerView = null;
+                Debug.Log("[AdManager] Banner kaldirildi.");
+            }
+#endif
+        }
+
         private void OnDestroy()
         {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
 #if UNITY_ANDROID
             if (_interstitialAd != null)
             {
@@ -311,6 +384,11 @@ namespace LudoFriends.Services
             {
                 _rewardedAd.Destroy();
                 _rewardedAd = null;
+            }
+            if (_bannerView != null)
+            {
+                _bannerView.Destroy();
+                _bannerView = null;
             }
 #endif
             if (Instance == this) Instance = null;
